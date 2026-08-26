@@ -1,7 +1,7 @@
 Django==5.2.7
 djangorestframework==3.15.0
 djangorestframework-simplejwt==5.3.0
-psycopg-binary==3.2.1
+psycopg[binary]==3.2.1
 dj-database-url==2.1.0
 python-decouple==3.8
 anthropic>=0.25.0
