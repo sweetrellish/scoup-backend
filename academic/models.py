@@ -48,7 +48,10 @@ class Faculty(models.Model):
     low_category_urls = models.JSONField(default=list, blank=True)
     themes = models.JSONField(default=list, blank=True)
     journals = models.JSONField(default=list, blank=True)
-    source_profile = models.JSONField(default=dict, blank=True)
+    expertise = models.JSONField(default=list, blank=True)
+    academic = models.IntegerField(default=0)
+    practice = models.IntegerField(default=0)
+    publication = models.IntegerField(default=0)
 
     def __str__(self):
         return (
@@ -56,7 +59,6 @@ class Faculty(models.Model):
             or f"{(self.first_name or '').strip()} {(self.last_name or '').strip()}".strip()
             or self.faculty_id
         )
-
 
 class Paper(models.Model):
     doi = models.CharField(max_length=255, unique=True)
@@ -90,7 +92,6 @@ class Paper(models.Model):
     paper_embedding = models.JSONField(default=list, blank=True)
     embedding_model = models.CharField(max_length=64, default="", blank=True)
     embedding_updated_at = models.DateTimeField(null=True, blank=True)
-
     def __str__(self):
         return self.title
 
@@ -162,6 +163,6 @@ class FacultySuggestionDecision(models.Model):
         unique_together = ("reviewer", "external_faculty")
 
     def __str__(self):
-        return f"{self.reviewer_id}->{self.external_faculty_id}:{self.decision}"
+        return f"{self.reviewer}->{self.external_faculty}:{self.decision}"
 
 

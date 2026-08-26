@@ -416,7 +416,8 @@ class Command(BaseCommand):
             # Build lookup maps for author linking
             fac_by_name = {}
             doi_to_faculty_ids = {}
-            for fac in Faculty.objects.all():
+
+            for fac in academic.models.Faculty.objects.all():
                 key = (fac.name or "").strip().lower()
                 if key:
                     fac_by_name.setdefault(key, []).append(fac)

@@ -3,7 +3,7 @@
 import uuid
 from rest_framework import serializers
 
-from .models import Faculty, Paper, Patent, Project
+from academic.models import Faculty, Paper, Patent, Project
 
 
 class EmptyStringToNoneDateField(serializers.DateField):

@@ -1,7 +1,7 @@
  services:
   - type: web
     name: scoup-backend
-    env: python
+    runtime: python
     buildCommand: "./build.sh"
     startCommand: "gunicorn scoupdb.wsgi:application"
     envVars:
@@ -10,4 +10,4 @@
       - key: SECRET_KEY
         generateValue: true
       - key: DEBUG
-        value: False
+        value: "False"

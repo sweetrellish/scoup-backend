@@ -1,12 +1,12 @@
-
+import logging
 import re
 import uuid
 
 import pdfplumber
 from django.contrib.auth.models import User
-from django.db import transaction
+from django.db import transaction, DatabaseError
 from django.db.models import Q
-from django.db.utils import OperationalError
+from django.db.utils import OperationalError, ProgrammingError
 from django.http import HttpResponse
 from rest_framework import filters, generics, status
 from rest_framework.decorators import api_view, permission_classes
@@ -33,6 +33,7 @@ from .serializers import (
 )
 from .semantic import cosine_similarity, create_query_embedding
 
+logger = logging.getLogger(__name__)
 
 def _normalize_keyword_list(value):
     if value is None:
@@ -93,8 +94,8 @@ def _first_non_empty(*values):
             trimmed = value.strip()
             if trimmed:
                 return trimmed
-            continue
-        return value
+        else:
+            return value
     return None
 
 
@@ -122,6 +123,7 @@ def _absorb_external_faculty(internal, external):
 
     candidate_email = _first_non_empty(internal.email, external.email)
     if _email_available_for_faculty(candidate_email, internal.id, external.id):
+        assert candidate_email is not None
         internal.email = candidate_email.lower()
 
     internal.department_affiliations = _merge_unique_list(
@@ -278,7 +280,7 @@ def _external_faculty_preview_payload(external):
 def _get_request_faculty(user, create_if_missing=False):
     faculty = Faculty.objects.filter(user=user).first()
     if faculty:
-        if faculty.user_id and not faculty.is_approved:
+        if faculty.faculty_id and not faculty.is_approved:
             faculty.is_approved = True
             faculty.save(update_fields=["is_approved", "updated_at"])
         return faculty
@@ -308,143 +310,154 @@ def _get_request_faculty(user, create_if_missing=False):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def public_search_data(request):
-    faculty_qs = (
-        Faculty.objects.filter(profile_visibility=True)
-        .filter(Q(is_approved=True) | Q(user__isnull=False))
-        .prefetch_related("projects", "patents")
-        .select_related("user")
-        .order_by("last_name", "first_name")
-    )
-    papers_qs = (
-        Paper.objects.defer("paper_embedding", "embedding_model", "embedding_updated_at")
-        .prefetch_related("authors")
-        .order_by("-id")
-    )
-    projects_qs = Project.objects.all().prefetch_related("faculty").order_by("-id")
-    patents_qs = Patent.objects.all().prefetch_related("faculty").order_by("-id")
-
-    faculty = []
-    for item in faculty_qs:
-        user_first_name = (item.user.first_name if item.user else "") or ""
-        user_last_name = (item.user.last_name if item.user else "") or ""
-        user_username = (item.user.username if item.user else "") or ""
-        full_name = _full_name(
-            item.first_name or user_first_name,
-            item.last_name or user_last_name,
-            (item.name or "").strip() or user_username or item.email or item.faculty_id,
+    try:
+        faculty_qs = (
+            Faculty.objects.filter(profile_visibility=True)
+            .filter(Q(is_approved=True) | Q(user__isnull=False))
+            .prefetch_related("projects", "patents")
+            .select_related("user")
+            .order_by("last_name", "first_name")
         )
-        merged_keywords = _merge_unique_list(item.keywords, item.faculty_keywords, item.ai_keywords)
-        photo_url = request.build_absolute_uri(item.photo.url) if item.photo else ""
+        papers_qs = (
+            Paper.objects.defer("paper_embedding", "embedding_model", "embedding_updated_at")
+            .prefetch_related("authors")
+            .order_by("-id")
+        )
+        projects_qs = Project.objects.all().prefetch_related("faculty").order_by("-id")
+        patents_qs = Patent.objects.all().prefetch_related("faculty").order_by("-id")
 
-        faculty.append(
+        faculty = []
+        for item in faculty_qs:
+            user_first_name = (item.user.first_name if item.user else "") or ""
+            user_last_name = (item.user.last_name if item.user else "") or ""
+            user_username = (item.user.username if item.user else "") or ""
+
+            full_name = _full_name(
+                item.first_name or user_first_name,
+                item.last_name or user_last_name,
+                (item.name or "").strip() or user_username or item.email or item.faculty_id,
+            )
+            merged_keywords = _merge_unique_list(
+               item.keywords, item.faculty_keywords, item.ai_keywords
+            )
+            merged_keywords = [k for k in (merged_keywords or []) if k]
+
+            # FileField.url can raise if file missing or storage misconfigured
+            photo_url = ""
+            if item.photo:
+                try:
+                    photo_url = request.build_absolute_uri(item.photo.url)
+                except Exception:
+                    photo_url = ""
+
+            faculty.append(
+                {
+                    "id": str(item.faculty_id),
+                    "name": full_name,
+                    "title": item.title or "",
+                    "department": item.department or "",
+                    "email": item.email or "",
+                    "phone": item.phone or "",
+                    "photo": photo_url,
+                    "bio": item.bio or "",
+                    "researchInterests": merged_keywords[:8],
+                    "aiKeywords": merged_keywords,
+                    "metricsProfile": {
+                        "totalCitations": item.total_citations or 0,
+                        "articleCount": item.article_count or 0,
+                        "averageCitations": item.average_citations or 0.0,
+                    },
+                    "categories": {
+                        "top": _normalize_keyword_list(item.top_level_categories),
+                        "mid": _normalize_keyword_list(item.mid_level_categories),
+                        "low": _normalize_keyword_list(item.low_level_categories),
+                    },
+                    "themes": _normalize_keyword_list(item.themes),
+                    "journals": _normalize_keyword_list(item.journals),
+                    "sourceProfile": item.source_profile or {},
+                }
+            )
+
+        papers = []
+        for item in papers_qs:
+            year = _year_from_dates(
+                item.date_published_online, item.date_published_print, item.date_published
+            )
+            papers.append(
+                {
+                    "id": str(item.pk),
+                    "title": item.title or "",
+                    "doi": item.doi or "",
+                    "journal": item.journal or "",
+                    "authors": [
+                        author.name
+                        or f"{author.first_name or ''} {author.last_name or ''}".strip()
+                        for author in item.authors.all()
+                    ],
+                    "year": year or 0,
+                    "abstract": item.abstract or "",
+                    # keep the rest of your paper fields here...
+                }
+            )
+
+        projects = []
+        for item in projects_qs:
+            projects.append(
+                {
+                    "id": str(item.pk),
+                    "title": getattr(item, "title", "") or "",
+                    "description": getattr(item, "description", "") or "",
+                }
+            )
+
+        patents = []
+        for item in patents_qs:
+            patents.append(
+                {
+                    "id": str(item.pk),
+                    "title": getattr(item, "title", "") or "",
+                    "number": getattr(item, "patent_number", "") or getattr(item, "number", "") or "",
+                }
+            )
+#new logic added to help debug aikeywords not being populated -RE 4/10/2026 ERROR:Failed to load backend dataset: TypeError: can't access property "forEach", n.aiKeywords is undefined
+        for f in faculty:
+            if not isinstance(f.get("aiKeywords"), list):
+                f["aiKeywords"] = []
+            if not isinstance(f.get("researchInterests"), list):
+                f["researchInterests"] = []
+        for p in papers:
+            if not isinstance(p.get("aiKeywords"), list):
+                p["aiKeywords"] = []
+        for pat in patents:
+            if not isinstance(pat.get("aiKeywords"), list):
+                pat["aiKeywords"] = []
+        for proj in projects:
+            if not isinstance(proj.get("aiKeywords"), list):
+                proj["aiKeywords"] = []
+        for proj in projects:
+            if "leadFaculty" not in proj or not isinstance(proj["leadFaculty"], list):
+                proj["leadFaculty"] = []
+        for pat in patents:
+            if "inventors" not in pat or not isinstance(pat["inventors"], list):
+                pat["inventors"] = []
+        return Response(
             {
-                "id": str(item.id),
-                "name": full_name,
-                "title": item.title or "",
-                "department": item.department or "",
-                "email": item.email or "",
-                "phone": item.phone or "",
-                "photo": photo_url,
-                "bio": item.bio or "",
-                "researchInterests": merged_keywords[:8],
-                "aiKeywords": merged_keywords,
-                "metricsProfile": {
-                    "totalCitations": item.total_citations or 0,
-                    "articleCount": item.article_count or 0,
-                    "averageCitations": item.average_citations or 0.0,
-                },
-                "categories": {
-                    "top": _normalize_keyword_list(item.top_level_categories),
-                    "mid": _normalize_keyword_list(item.mid_level_categories),
-                    "low": _normalize_keyword_list(item.low_level_categories),
-                },
-                "themes": _normalize_keyword_list(item.themes),
-                "journals": _normalize_keyword_list(item.journals),
-                "sourceProfile": item.source_profile or {},
-            }
+                "facultyData": faculty,
+                "papersData": papers,
+                "patentsData": patents,
+                "projectsData": projects,
+            },
+            status=status.HTTP_200_OK,
         )
-
-    papers = []
-    for item in papers_qs:
-        year = _year_from_dates(
-            item.date_published_online, item.date_published_print, item.date_published
-        )
-        papers.append(
+    except Exception  as e:
+        # Log full detail server-side
+        logger.exception("public_search_data failed (unexpected): %s", e)
+        return Response(
             {
-                "id": str(item.id),
-                "title": item.title or "",
-                "doi": item.doi or "",
-                "journal": item.journal or "",
-                "authors": [author.name or f"{author.first_name or ''} {author.last_name or ''}".strip() for author in item.authors.all()],
-                "year": year or 0,
-                "abstract": item.abstract or "",
-                "link": item.url or item.download_url or item.license_url or "",
-                "citations": item.tc_count or 0,
-                "publishedOnline": item.date_published_online.isoformat() if item.date_published_online else "",
-                "publishedPrint": item.date_published_print.isoformat() if item.date_published_print else "",
-                "aiKeywords": _normalize_keyword_list(item.keywords)
-                or _normalize_keyword_list(item.ai_keywords)
-                or _normalize_keyword_list(item.faculty_keywords),
-                "categories": {
-                    "top": _normalize_keyword_list(item.top_level_categories),
-                    "mid": _normalize_keyword_list(item.mid_level_categories),
-                    "low": _normalize_keyword_list(item.low_level_categories),
-                },
-                "facultyMembers": _normalize_keyword_list(item.faculty_members),
-                "facultyAffiliations": item.faculty_affiliations or {},
-                "sourceMetadata": item.source_metadata or {},
-                "engagementMetrics": item.engagement_metrics or {},
-            }
+                "error": "service_unavailable",
+                "detail": "Internal server error."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-
-    projects = []
-    for item in projects_qs:
-        projects.append(
-            {
-                "id": str(item.id),
-                "title": item.title or "",
-                "leadFaculty": [
-                    member.name
-                    or f"{member.first_name or ''} {member.last_name or ''}".strip()
-                    for member in item.faculty.all()
-                ],
-                "status": item.status or "Active",
-                "description": item.description or "",
-                "startDate": item.start_date.isoformat() if item.start_date else "",
-                "endDate": item.end_date.isoformat() if item.end_date else "",
-                "aiKeywords": _normalize_keyword_list(item.keywords),
-            }
-        )
-
-    patents = []
-    for item in patents_qs:
-        patents.append(
-            {
-                "id": str(item.id),
-                "title": item.title or "",
-                "inventors": [
-                    member.name
-                    or f"{member.first_name or ''} {member.last_name or ''}".strip()
-                    for member in item.faculty.all()
-                ],
-                "patentNumber": item.patent_number or "",
-                "year": item.issue_date.year if item.issue_date else 0,
-                "description": item.abstract or "",
-                "link": item.link or "",
-                "aiKeywords": _normalize_keyword_list(item.aiKeywords),
-            }
-        )
-
-    return Response(
-        {
-            "facultyData": faculty,
-            "papersData": papers,
-            "patentsData": patents,
-            "projectsData": projects,
-        }
-    )
-
-
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def semantic_paper_search(request):
@@ -462,17 +475,51 @@ def semantic_paper_search(request):
 
     try:
         query_embedding = create_query_embedding(query, model=model)
-    except RuntimeError as exc:
-        return Response(
-            {"results": [], "count": 0, "detail": str(exc)},
-            status=status.HTTP_503_SERVICE_UNAVAILABLE,
-        )
     except Exception as exc:
-        return Response(
-            {"results": [], "count": 0, "detail": f"Embedding failed: {exc}"},
-            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        # Embeddings unavailable (no/invalid OpenAI key, network, etc.)
+        # Fallback: plain keyword search
+        papers_qs = (
+            Paper.objects.filter(
+                Q(title__icontains=query) | Q(abstract__icontains=query)
+            )
+            .prefetch_related("authors")
+            .order_by("-id")[:limit]
         )
 
+        results = []
+        for paper in papers_qs:
+            year = _year_from_dates(
+                paper.date_published_online, paper.date_published_print, paper.date_published
+            )
+            results.append(
+                {
+                    "id": str(paper.pk),
+                    "title": paper.title or "",
+                    "doi": paper.doi or "",
+                    "journal": paper.journal or "",
+                    "authors": [
+                        author.name
+                        or f"{author.first_name or ''} {author.last_name or ''}".strip()
+                        for author in paper.authors.all()
+                    ],
+                    "year": year or 0,
+                    "abstract": paper.abstract or "",
+                    "link": paper.url or paper.download_url or paper.license_url or "",
+                    "citations": paper.tc_count or 0,
+                    "semanticScore": 0.0,
+                }
+            )
+
+        return Response(
+            {
+                "query": query,
+                "model": model,
+                "count": len(results),
+                "results": results,
+                "detail": f"Embeddings unavailable; used keyword fallback. ({exc})",
+            },
+            status=status.HTTP_200_OK,
+        )
     try:
         papers = (
             Paper.objects.exclude(paper_embedding=[])
@@ -859,7 +906,7 @@ def faculty_me_suggestions(request):
         if score >= 3:
             suggestions.append(
                 {
-                    "id": candidate.id,
+                    "id": candidate.pk,
                     "faculty_id": candidate.faculty_id,
                     "name": _full_name(
                         candidate.first_name,
@@ -896,7 +943,7 @@ def approve_faculty_suggestion(request, external_faculty_id):
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    if external.id == internal.id:
+    if external.pk == internal.pk:
         return Response(
             {"detail": "Cannot absorb your own faculty profile."},
             status=status.HTTP_400_BAD_REQUEST,

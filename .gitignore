@@ -2,29 +2,79 @@
 __pycache__/
 *.py[cod]
 *.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
 # Virtual environments
+.env.local
 venv/
 env/
 .env
 .venv/
+.env.*
 
 # Django
 *.log
 *.pot
 *.pyc
+*.sqlite
+db.sqlite3.broken
+db.sqlite3.backup
 db.sqlite3
 /media/
 /staticfiles/
 /static/
 /media/
 
+#Logs/Backups
+logs/
+*.log
+backups/
+*.backup
+*.bak
+backupAll.sh
+create_backup.sh
+backups/
+*_backup/
+*.broken
+nohup.out
+
 # macOS
 .DS_Store
+Thumbs.db
+
+# PDFs (local reference files)
+SUdirectory.pdf
+database-structrue.pdf
 
 # IDE files
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# Environment variables
-.env
+# Local scripts and data
+scripts/
+data/
+docs/
+
+# Misc
+staticfiles/
+*.txt
+core/
+

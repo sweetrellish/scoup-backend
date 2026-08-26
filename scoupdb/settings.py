@@ -2,7 +2,8 @@ from pathlib import Path
 import os
 import dj_database_url
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key")
 
@@ -63,9 +64,9 @@ WSGI_APPLICATION = 'scoupdb.wsgi.application'
 
 DATABASES = {
     "default": dj_database_url.config(
-        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+        default=f"sqlite:///{PROJECT_ROOT / 'db.sqlite3'}",
         conn_max_age=600,
-        ssl_require=os.environ.get("RENDER", False),
+        ssl_require=(os.environ.get("RENDER", "").lower() in {"1", "true", "yes", "on"}),
     )
 }
 
