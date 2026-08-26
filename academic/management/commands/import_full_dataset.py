@@ -5,7 +5,9 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from academic.models import Faculty, Paper, PaperAuthorship
+import academic
+
+import academic.models
 
 
 def parse_date_any(value):
@@ -321,9 +323,11 @@ class Command(BaseCommand):
         )
 
         if reset and not dry:
-            PaperAuthorship.objects.all().delete()
-            Paper.objects.all().delete()
-            Faculty.objects.all().delete()
+            academic.models.PaperAuthorship.objects.all().delete()
+            academic.models.Paper.objects.all().delete()
+
+
+            academic.models.Faculty.objects.all().delete()
             self.stdout.write(
                 self.style.WARNING(
                     "Existing Faculty/Paper/PaperAuthorship deleted (per --reset)."
@@ -343,7 +347,8 @@ class Command(BaseCommand):
                 if not fid or not name:
                     continue
 
-                fac, made = Faculty.objects.get_or_create(
+
+                fac, made = academic.models.Faculty.objects.get_or_create(
                     faculty_id=fid,
                     defaults={"name": name},
                 )
@@ -426,7 +431,7 @@ class Command(BaseCommand):
                     dnorm = normalize_doi(doi)
                     if not dnorm:
                         continue
-                    doi_to_faculty_ids.setdefault(dnorm.lower(), set()).add(fac.id)
+                    doi_to_faculty_ids.setdefault(dnorm.lower(), set()).add(fac.pk)
 
             # 2) PAPERS
             for j, article_rec in enumerate(papers_json, 1):
@@ -456,7 +461,8 @@ class Command(BaseCommand):
                 if not title:
                     continue
 
-                paper, made = Paper.objects.get_or_create(
+
+                paper, made = academic.models.Paper.objects.get_or_create(
                     doi=doi,
                     defaults={"title": title[:500]},
                 )
@@ -589,17 +595,20 @@ class Command(BaseCommand):
             # 3) LINKING
 
             # (a) By DOI crosswalk from Faculty.dois
-            doi_lower_to_paper = {p.doi.lower(): p for p in Paper.objects.all()}
+
+            doi_lower_to_paper = {p.doi.lower(): p for p in academic.models.Paper.objects.all()}
             for dlower, fac_ids in doi_to_faculty_ids.items():
                 paper = doi_lower_to_paper.get(dlower)
                 if not paper:
                     continue
                 for faculty_id in fac_ids:
-                    fac = Faculty.objects.filter(id=faculty_id).first()
+
+                    fac = academic.models.Faculty.objects.filter(id=faculty_id).first()
                     if not fac:
                         continue
                     paper.authors.add(fac)
-                    PaperAuthorship.objects.get_or_create(
+
+                    academic.models.PaperAuthorship.objects.get_or_create(
                         paper=paper,
                         faculty=fac,
                         defaults={"status": "pending"},
@@ -616,7 +625,8 @@ class Command(BaseCommand):
                 if not doi:
                     continue
 
-                paper = Paper.objects.filter(doi=doi).first()
+
+                paper = academic.models.Paper.objects.filter(doi=doi).first()
                 if not paper:
                     continue
 
@@ -626,7 +636,8 @@ class Command(BaseCommand):
                         continue
                     for fac in fac_by_name.get(key, []):
                         paper.authors.add(fac)
-                        PaperAuthorship.objects.get_or_create(
+
+                        academic.models.PaperAuthorship.objects.get_or_create(
                             paper=paper,
                             faculty=fac,
                             defaults={"status": "pending"},
