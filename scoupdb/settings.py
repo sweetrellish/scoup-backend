@@ -25,10 +25,10 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
-    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -95,19 +95,18 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 FRONTEND_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://localhost:3000",
-    "http://127.0.0.1:3001",
-    "http://localhost:3001",
-    "http://127.0.0.1:5173",
-    "http://localhost:5173",
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "https://scoup-frontend-lzz9ri4xh-scoup.vercel.app",
+    "https://scoup-salisbury.net",
     "https://scoup-frontend.vercel.app",
-    "https://scoup-frontend-gfuswkjyy-ope-m-ades-projects.vercel.app",
-    "https://scoup-frontend-2-0.vercel.app",
-    "https://scoup-frontend-2-0-2poqqdhc7-ope-m-ades-projects.vercel.app",
+    "https://scoup-frontend-2-0.vercel.app"
 ]
 
+CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = FRONTEND_ORIGINS
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^https://scoup-frontend-2-0-[a-z0-9-]+-ope-m-ades-projects\.vercel\.app$",
+    r"^https://scoup-frontend-2-0-[a-z0-9-]+-sweetrellish-projects\.vercel\.app$",
 ]
 CSRF_TRUSTED_ORIGINS = FRONTEND_ORIGINS
 
