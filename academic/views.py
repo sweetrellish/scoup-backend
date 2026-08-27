@@ -1,6 +1,8 @@
 import logging
 import re
 import uuid
+from rest_framework.permissions import BasePermission
+
 
 import pdfplumber
 from django.contrib.auth.models import User
@@ -691,7 +693,15 @@ class PatentListCreateView(generics.ListCreateAPIView):
         patent.faculty.add(faculty)
         patent.save()
 
-
+class IsApprovedUpdateOnly(BasePermission):
+    """Allow unauthenticated PUT/PATCH to is_approved field only"""
+    def has_permission(self, request, view):
+        if request.method in ['PUT', 'PATCH']:
+            # Allow unauthenticated is_approved updates
+            data = request.data or {}
+            if set(data.keys()) == {'is_approved'} or 'is_approved' in data:
+                return True
+        return request.user and request.user.is_authenticated
 class FacultyDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = FacultyProfileSerializer
     permission_classes = [IsAuthenticated]
