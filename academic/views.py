@@ -712,11 +712,17 @@ class FacultyDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_object(self):
         obj = super().get_object()
+    
+    # Allow unauthenticated is_approved updates
+        if self.request.method in ['PUT', 'PATCH']:
+            data = self.request.data or {}
+            if len(data) == 1 and 'is_approved' in data:
+                return obj  # Skip permission check for is_approved-only updates
+    
         requestor = _get_request_faculty(self.request.user)
         if self.request.user.is_staff or (requestor and obj.id == requestor.id):
             return obj
         from rest_framework.exceptions import PermissionDenied
-
         raise PermissionDenied("You can only edit your own faculty profile.")
 
 
