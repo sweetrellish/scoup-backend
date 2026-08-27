@@ -697,14 +697,17 @@ class IsApprovedUpdateOnly(BasePermission):
     """Allow unauthenticated PUT/PATCH to is_approved field only"""
     def has_permission(self, request, view):
         if request.method in ['PUT', 'PATCH']:
-            # Allow unauthenticated is_approved updates
             data = request.data or {}
-            if set(data.keys()) == {'is_approved'} or 'is_approved' in data:
+            # Only allow if ONLY is_approved is being updated
+            if len(data) == 1 and 'is_approved' in data:
                 return True
-        return request.user and request.user.is_authenticated
+        # Otherwise require authentication
+        return bool(request.user and request.user.is_authenticated)
+
 class FacultyDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = FacultyProfileSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsApprovedUpdateOnly]
+    authentication_classes = []
     queryset = Faculty.objects.all()
 
     def get_object(self):
