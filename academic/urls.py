@@ -3,6 +3,12 @@ from django.conf import settings
 from django.conf.urls.static import static
 from . import views
 from .auth import EmailOrUsernameTokenObtainPairView
+from .network_views import (
+    network_discovery,
+    network_inquire,
+    faculty_inquiries,
+    faculty_inquiry_detail,
+)
 from .views import (
     approve_faculty_suggestion,
     categories_list,
@@ -35,6 +41,10 @@ urlpatterns = [
     path("semantic/papers/", semantic_paper_search, name="semantic-paper-search"),
     path("categories/", categories_list, name="categories-list"),
     path("query-expansions/", query_expansions, name="query-expansions"),
+    path("network/discovery/", network_discovery, name="network-discovery"),
+    path("network/inquire/", network_inquire, name="network-inquire"),
+    path("faculty/inquiries/", faculty_inquiries, name="faculty-inquiries"),
+    path("faculty/inquiries/<int:pk>/", faculty_inquiry_detail, name="faculty-inquiry-detail"),
     path("categories/<str:category>/", category_detail, name="category-detail"),
 
     path('faculty/', FacultyListCreateView.as_view(), name='faculty-list'),

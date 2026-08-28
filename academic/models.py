@@ -168,3 +168,44 @@ class FacultySuggestionDecision(models.Model):
         return f"{self.reviewer}->{self.external_faculty}:{self.decision}"
 
 
+class NetworkInquiry(models.Model):
+    """Intro/collaboration request raised from the network or public search."""
+
+    STATUS_CHOICES = [
+        ("new", "New"),
+        ("reviewed", "Reviewed"),
+        ("closed", "Closed"),
+    ]
+
+    target_faculty = models.ForeignKey(
+        Faculty, on_delete=models.SET_NULL, null=True, blank=True, related_name="inquiries"
+    )
+    target_faculty_name = models.CharField(max_length=255)
+    target_department = models.CharField(max_length=255, blank=True, default="")
+    target_school = models.CharField(max_length=255, blank=True, default="")
+    target_project_id = models.CharField(max_length=64, blank=True, default="")
+    target_project_title = models.CharField(max_length=500, blank=True, default="")
+
+    requester = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="network_inquiries"
+    )
+    requester_name = models.CharField(max_length=255, blank=True, default="")
+    requester_email = models.EmailField(blank=True, default="")
+    requester_organization = models.CharField(max_length=255, blank=True, default="")
+    requester_role = models.CharField(max_length=120, blank=True, default="")
+
+    shared_keywords = models.JSONField(default=list, blank=True)
+    note = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="new")
+
+    # Retained for abuse throttling on the unauthenticated endpoint.
+    created_ip = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name_plural = "network inquiries"
+
+    def __str__(self):
+        return f"{self.requester_name or self.requester_email} -> {self.target_faculty_name}"

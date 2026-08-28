@@ -318,6 +318,43 @@ screenshots. `collaboration` and `network` do not yet exist.
 - **Status:** In repo + repo DB. **NOT yet deployed;** the live DB also needs
   `manage.py migrate` and a directory import run.
 
+### 2026-08-28 18:48 - Network discovery + inquiry surface
+
+- **Restore ID:** `SRC-20260828-1848`
+- **Type:** Source + schema
+- **Artifacts:** `~/scoup-backups/models.py.before-inquiry.*`
+- **Files added:** `academic/network_views.py`, `academic/migrations/0008_networkinquiry.py`
+- **Files changed:** `academic/models.py`, `academic/urls.py`
+
+**Endpoints implemented** (matching `NetworkPage.tsx` / `api.ts` contracts):
+
+| Endpoint | Auth | Purpose |
+| --- | --- | --- |
+| `GET /api/network/discovery/?q=&limit=` | optional | colleagues, papers, patents, projects + profileKeywords/suggestedCategories/expandedTerms |
+| `POST /api/network/inquire/` | optional | intro request; anonymous callers must supply name + email |
+| `GET /api/faculty/inquiries/` | required | inquiries addressed to the signed-in faculty |
+| `PATCH /api/faculty/inquiries/<id>/` | required | set status new/reviewed/closed |
+
+Discovery personalises from the signed-in faculty profile when no `q` is supplied, and returns
+`matchScore` + `sharedKeywords` + `matchReason` so the UI can explain each result. It also returns
+`directoryVerified`, so verified SU faculty can be visually distinguished from imported external
+co-authors.
+
+**Security controls on the unauthenticated write path.** `POST /network/inquire/` is the first
+endpoint that accepts writes without auth, so it enforces:
+
+- required + RFC-validated `requester_email`, required `requester_name`
+- note truncated to 4,000 chars; all string fields length-capped to column widths
+- **5 submissions per IP per hour**, returning HTTP 429 (verified: 6th request throttled)
+- requester IP stored solely for throttling
+- ownership check on PATCH - only the target faculty or staff may change status
+
+**New model `NetworkInquiry`** stores target, requester, shared keywords, note, and status.
+
+- **Verification:** `manage.py check` clean; discovery 200 with ranked colleagues/papers;
+  inquire 201; invalid email 400; missing target 400; throttle 429.
+- **Status:** In repo. **NOT yet deployed** - live needs `migrate` for `0008_networkinquiry`.
+
 ---
 
 ## Known open items
