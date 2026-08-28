@@ -376,7 +376,6 @@ def public_search_data(request):
                     },
                     "themes": _normalize_keyword_list(item.themes),
                     "journals": _normalize_keyword_list(item.journals),
-                    "sourceProfile": item.source_profile or {},
                 }
             )
 

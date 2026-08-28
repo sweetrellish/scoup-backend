@@ -100,7 +100,9 @@ FRONTEND_ORIGINS = [
     "https://scoup-frontend-lzz9ri4xh-scoup.vercel.app",
     "https://scoup-salisbury.net",
     "https://scoup-frontend.vercel.app",
-    "https://scoup-frontend-2-0.vercel.app"
+    "https://scoup-frontend-2-0.vercel.app",
+    "https://scoup-backend-ryan.onrender.com"
+
 ]
 
 CORS_ALLOW_CREDENTIALS = True
