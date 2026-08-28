@@ -736,67 +736,115 @@ def semantic_paper_search(request):
 
 
 
-def _category_counts():
-    """Aggregate the research taxonomy from paper keywords and faculty categories."""
-    paper_counts = Counter()
-    for values in Paper.objects.values_list("keywords", flat=True):
-        for name in _normalize_keyword_list(values):
-            paper_counts[name] += 1
+def _split_top_level(name):
+    """Derive a top-level grouping from the flat taxonomy string.
 
-    faculty_counts = Counter()
-    faculty_qs = Faculty.objects.filter(profile_visibility=True).filter(
+    The dataset has no populated hierarchy (top/mid/low_level_categories are empty),
+    so the segment before the first comma is used as the grouping key.
+    """
+    return name.split(",")[0].strip() or name.strip()
+
+
+def _visible_faculty_qs():
+    return Faculty.objects.filter(profile_visibility=True).filter(
         Q(is_approved=True) | Q(user__isnull=False)
     )
-    for values in faculty_qs.values_list("categories", flat=True):
-        for name in _normalize_keyword_list(values):
-            faculty_counts[name] += 1
 
-    return paper_counts, faculty_counts
+
+def _category_index():
+    """Map category name -> {papers: [Paper], faculty: [Faculty]}."""
+    index = {}
+
+    for paper in Paper.objects.prefetch_related("authors"):
+        for name in _normalize_keyword_list(paper.keywords):
+            index.setdefault(name, {"papers": [], "faculty": []})["papers"].append(paper)
+
+    for member in _visible_faculty_qs():
+        for name in _normalize_keyword_list(member.categories):
+            index.setdefault(name, {"papers": [], "faculty": []})["faculty"].append(member)
+
+    return index
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def query_expansions(request):
+    """Abbreviation -> expansion map used by the frontend to widen short queries."""
+    return Response(
+        {
+            "ai": "artificial intelligence",
+            "ml": "machine learning",
+            "llm": "large language models",
+            "nlp": "natural language processing",
+            "cs": "computer science",
+            "cv": "computer vision",
+            "hci": "human computer interaction",
+            "iot": "internet of things",
+            "gis": "geographic information systems",
+            "ph": "public health",
+            "psych": "psychology",
+            "bio": "biology",
+            "chem": "chemistry",
+            "econ": "economics",
+            "stats": "statistics",
+            "eng": "engineering",
+            "env": "environmental science",
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def categories_list(request):
     try:
-        paper_counts, faculty_counts = _category_counts()
+        index = _category_index()
 
-        search = (request.query_params.get("q") or "").strip().lower()
-        try:
-            min_count = max(0, int(request.query_params.get("min_count", 1)))
-        except (TypeError, ValueError):
-            min_count = 1
+        groups = {}
+        for name, bucket in index.items():
+            top = _split_top_level(name)
+            group = groups.setdefault(
+                top, {"papers": set(), "faculty": set(), "children": {}}
+            )
+            group["papers"].update(p.pk for p in bucket["papers"])
+            group["faculty"].update(f.pk for f in bucket["faculty"])
+            if name != top:
+                group["children"][name] = (
+                    len(bucket["papers"]),
+                    len(bucket["faculty"]),
+                )
 
-        categories = []
-        for name in set(paper_counts) | set(faculty_counts):
-            if search and search not in name.lower():
-                continue
-            papers = paper_counts.get(name, 0)
-            faculty = faculty_counts.get(name, 0)
-            if papers + faculty < min_count:
-                continue
-            categories.append(
+        payload = []
+        for top, group in groups.items():
+            mids = [
                 {
-                    "name": name,
-                    "slug": slugify(name),
-                    "paperCount": papers,
-                    "facultyCount": faculty,
-                    "totalCount": papers + faculty,
+                    "name": child,
+                    "slug": slugify(child),
+                    "article_count": counts[0],
+                    "faculty_count": counts[1],
+                }
+                for child, counts in sorted(group["children"].items())
+            ]
+            payload.append(
+                {
+                    "name": top,
+                    "slug": slugify(top),
+                    "article_count": len(group["papers"]),
+                    "faculty_count": len(group["faculty"]),
+                    "mid_level_categories": mids,
                 }
             )
 
-        categories.sort(key=lambda item: (-item["totalCount"], item["name"]))
+        payload.sort(key=lambda item: (-item["article_count"], item["name"]))
 
         limit_param = request.query_params.get("limit")
         if limit_param:
             try:
-                categories = categories[: max(1, int(limit_param))]
+                payload = payload[: max(1, int(limit_param))]
             except (TypeError, ValueError):
                 pass
 
-        return Response(
-            {"categories": categories, "count": len(categories)},
-            status=status.HTTP_200_OK,
-        )
+        return Response(payload, status=status.HTTP_200_OK)
     except Exception as exc:
         logger.exception("categories_list failed: %s", exc)
         return Response(
@@ -811,85 +859,129 @@ def category_detail(request, category):
     try:
         target = (category or "").strip()
         target_slug = slugify(target)
-        paper_counts, faculty_counts = _category_counts()
+        index = _category_index()
 
-        matched_name = None
-        for name in set(paper_counts) | set(faculty_counts):
-            if name.lower() == target.lower() or slugify(name) == target_slug:
-                matched_name = name
-                break
+        # A slug may address either an exact category or a derived top-level group.
+        member_names = [
+            name
+            for name in index
+            if name.lower() == target.lower() or slugify(name) == target_slug
+        ]
+        display_name = member_names[0] if member_names else None
 
-        if matched_name is None:
+        if not member_names:
+            member_names = [
+                name for name in index if slugify(_split_top_level(name)) == target_slug
+            ]
+            if member_names:
+                display_name = _split_top_level(member_names[0])
+
+        if not member_names:
             return Response(
-                {
-                    "category": target,
-                    "papers": [],
-                    "faculty": [],
-                    "count": 0,
-                    "detail": "Unknown category.",
-                },
+                {"detail": "Unknown category.", "category_name": target, "slug": target_slug},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        needle = matched_name.lower()
+        papers = {}
+        faculty = {}
+        for name in member_names:
+            for paper in index[name]["papers"]:
+                papers[paper.pk] = paper
+            for member in index[name]["faculty"]:
+                faculty[member.pk] = member
 
-        papers = []
-        for paper in Paper.objects.prefetch_related("authors"):
-            names = {n.lower() for n in _normalize_keyword_list(paper.keywords)}
-            if needle not in names:
-                continue
-            year = _year_from_dates(
-                paper.date_published_online,
-                paper.date_published_print,
-                paper.date_published,
+        theme_counts = Counter()
+        for paper in papers.values():
+            for theme in _normalize_keyword_list(paper.themes):
+                theme_counts[theme] += 1
+
+        paper_payload = []
+        for paper in papers.values():
+            published = (
+                paper.date_published_online
+                or paper.date_published_print
+                or paper.date_published
             )
-            papers.append(
+            paper_payload.append(
                 {
-                    "id": str(paper.pk),
+                    "id": paper.pk,
                     "title": paper.title or "",
                     "doi": paper.doi or "",
-                    "journal": paper.journal or "",
-                    "year": year or 0,
-                    "citations": paper.tc_count or 0,
+                    "journal": paper.journal or None,
+                    "date_published": published.isoformat() if published else None,
+                    "tc_count": paper.tc_count or 0,
+                    "themes": _normalize_keyword_list(paper.themes),
+                    "mid_level_categories": _normalize_keyword_list(paper.keywords),
+                    "download_url": paper.download_url or paper.url or None,
                     "authors": [
-                        author.name
-                        or f"{author.first_name or ''} {author.last_name or ''}".strip()
+                        {
+                            "id": author.pk,
+                            "name": author.name
+                            or f"{author.first_name or ''} {author.last_name or ''}".strip(),
+                        }
                         for author in paper.authors.all()
                     ],
                 }
             )
-        papers.sort(key=lambda item: (item["year"], item["citations"]), reverse=True)
+        paper_payload.sort(key=lambda item: (item["date_published"] or "", item["tc_count"]), reverse=True)
 
-        faculty = []
-        faculty_qs = Faculty.objects.filter(profile_visibility=True).filter(
-            Q(is_approved=True) | Q(user__isnull=False)
-        )
-        for member in faculty_qs:
-            names = {n.lower() for n in _normalize_keyword_list(member.categories)}
-            if needle not in names:
-                continue
-            faculty.append(
+        faculty_payload = []
+        departments = set()
+        for member in faculty.values():
+            if member.department:
+                departments.add(member.department)
+            photo_url = ""
+            if member.photo:
+                try:
+                    photo_url = request.build_absolute_uri(member.photo.url)
+                except Exception:
+                    photo_url = ""
+            faculty_payload.append(
                 {
-                    "id": str(member.faculty_id),
+                    "id": member.pk,
                     "name": _full_name(
                         member.first_name,
                         member.last_name,
                         (member.name or "").strip() or member.faculty_id,
                     ),
-                    "department": member.department or "",
-                    "title": member.title or "",
+                    "department": member.department or None,
+                    "title": member.title or None,
+                    "total_citations": member.total_citations or 0,
+                    "article_count": member.article_count or 0,
+                    "photo": photo_url or None,
+                    "themes": _normalize_keyword_list(member.themes),
+                    "paper_ids": [
+                        p.pk for p in papers.values() if member.pk in {a.pk for a in p.authors.all()}
+                    ],
+                    "is_approved": bool(member.is_approved),
+                    "profile_visibility": bool(member.profile_visibility),
+                    "email": member.email or "",
                 }
             )
-        faculty.sort(key=lambda item: item["name"])
+        faculty_payload.sort(key=lambda item: item["name"])
+
+        total_citations = sum(item["tc_count"] for item in paper_payload)
+        article_count = len(paper_payload)
 
         return Response(
             {
-                "category": matched_name,
-                "slug": slugify(matched_name),
-                "papers": papers,
-                "faculty": faculty,
-                "count": len(papers),
-                "facultyCount": len(faculty),
+                "category_name": display_name or target,
+                "slug": slugify(display_name or target),
+                "stats": {
+                    "article_count": article_count,
+                    "faculty_count": len(faculty_payload),
+                    "department_count": len(departments),
+                    "total_citations": total_citations,
+                    "citation_average": round(total_citations / article_count, 2)
+                    if article_count
+                    else 0.0,
+                },
+                "themes": [
+                    {"name": name, "count": count}
+                    for name, count in theme_counts.most_common(50)
+                ],
+                "papers": paper_payload,
+                "faculty": faculty_payload,
             },
             status=status.HTTP_200_OK,
         )

@@ -165,9 +165,50 @@ Verified `settings.DEBUG` resolves to `False`.
 - **Restore:** `cp ~/scoup-backups/scripts/scoupsite-pushv4.sh.20260828-135546 ~/scoupsite-pushv4.sh`
 - **Verification:** `bash -n` syntax check passed.
 
+### 2026-08-28 14:29 - API contract alignment + SPA fallback fix
+
+- **Restore ID:** `SRC-20260828-1429`
+- **Type:** Source code
+- **Artifacts:** `~/scoup-backups/views.py.before-contract.*`
+- **Files changed:** `academic/views.py`, `academic/urls.py`, `scoupdb/urls.py`
+
+**1. Deploy activation.** The 14:14 deploy copied files correctly, but Gunicorn workers had
+started at 13:54 and were still serving pre-deploy code from memory. Sent SIGHUP to the master;
+systemd restarted the unit at 14:23 (~11s of 502). Live now serves the new code.
+
+**2. TemplateDoesNotExist: index.html - real root cause.** `scoupdb/urls.py` had a catch-all SPA
+fallback `path('<path:resource>', TemplateView(index.html))` that swallowed any unmatched route,
+including `/api/*`. No `templates/index.html` exists in the repo, and the `/var/www` copy is
+`drwxr-x--- root root` (unreadable by the service), so unmatched API paths raised a template error
+instead of 404. Replaced with a regex fallback excluding `api/`, `admin/`, `media/`, `static/`.
+Unmatched API routes now return 404, not 500.
+
+**3. Frontend/backend contract mismatch.** `scoup-frontend-2.0/src/utils/api.ts` expects a
+different shape than the endpoints returned:
+
+| | Frontend expects | Previously returned |
+| --- | --- | --- |
+| `/categories/` | bare array `TopLevelCategory[]` | `{categories: [...], count}` |
+| fields | `article_count`, `faculty_count`, `mid_level_categories[]` | `paperCount`, `facultyCount` |
+| `/categories/<slug>/` | `category_name`, `stats{}`, `themes[]` | `category`, flat counts |
+
+Endpoints rewritten to match `api.ts` exactly. Verified `/categories/` returns 290 items and
+`/categories/computer-science/` returns 31 papers / 87 faculty / citation_average 6.42.
+
+**4. Category hierarchy is derived, not stored.** `top/mid/low_level_categories` are empty on every
+record, so top-level grouping is derived from the segment before the first comma
+(e.g. `Sociology, general` -> `Sociology`). Heuristic; the real hierarchy needs a re-import.
+
+**5. Added `/api/query-expansions/`** returning an abbreviation->expansion map matching the
+`Record<string, string>` contract in `BrowseCategories.tsx`.
+
+- **Verification:** `manage.py check` clean; expansions 200 JSON; unknown API route 404.
+- **Status:** In repo, NOT yet deployed.
+
 ---
 
 ## Known open items
+
 
 | # | Item | Severity | Status |
 | --- | --- | --- | --- |

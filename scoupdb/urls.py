@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.conf import settings
 from django.conf.urls.static import static
-from django.urls import include, path
+from django.urls import include, path, re_path
 from django.views.generic import TemplateView
 from academic import views
 
@@ -11,9 +11,11 @@ urlpatterns = [
     path("api/", include("academic.urls")),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
+# Nginx serves the SPA from dist/, so Django must not swallow unmatched API routes
+# into a template fallback (that turned real 404s into TemplateDoesNotExist 500s).
 urlpatterns += [
-    path('', TemplateView.as_view(template_name='index.html')),
-    path('<path:resource>', TemplateView.as_view(template_name='index.html')),
+    re_path(r"^(?!api/|admin/|media/|static/)(?P<resource>.*)$",
+            TemplateView.as_view(template_name="index.html")),
 ]
 
 if settings.DEBUG:

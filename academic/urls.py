@@ -7,6 +7,7 @@ from .views import (
     approve_faculty_suggestion,
     categories_list,
     category_detail,
+    query_expansions,
     FacultyListCreateView,
     FacultyDetailView,
     faculty_me,
@@ -33,6 +34,7 @@ urlpatterns = [
     path("search/", semantic_paper_search, name="paper-search"),
     path("semantic/papers/", semantic_paper_search, name="semantic-paper-search"),
     path("categories/", categories_list, name="categories-list"),
+    path("query-expansions/", query_expansions, name="query-expansions"),
     path("categories/<str:category>/", category_detail, name="category-detail"),
 
     path('faculty/', FacultyListCreateView.as_view(), name='faculty-list'),
