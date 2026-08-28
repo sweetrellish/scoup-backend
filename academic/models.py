@@ -24,6 +24,8 @@ class Faculty(models.Model):
     faculty_keywords = models.TextField(blank=True, null=True)
     ai_keywords = models.TextField(blank=True, null=True)
     profile_visibility = models.BooleanField(default=True)
+    # Set when the record was matched against the official SU directory export.
+    directory_verified = models.BooleanField(default=False)
     is_approved = models.BooleanField(default=False)
     photo = models.ImageField(upload_to="faculty_photos/", blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)

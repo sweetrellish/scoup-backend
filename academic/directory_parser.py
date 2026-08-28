@@ -42,9 +42,12 @@ def _line_key(word):
 def parse_directory(path):
     entries = []
     current_dept = ""
+    _stop = False
 
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
+            if _stop:
+                break
             words = page.extract_words(extra_attrs=["fontname", "size"])
 
             lines = {}
@@ -55,7 +58,13 @@ def parse_directory(path):
                 row = sorted(lines[top], key=lambda w: w["x0"])
                 bold = [w for w in row if "Bold" in w["fontname"]]
 
-                # Bold 10pt rows are department headings; the 12pt row is the page title.
+                # The PDF repeats its 12pt title where the by-department section ends and an
+                # alphabetical section begins; that second section has no department headers.
+                if bold and bold[0]["size"] > 11.0 and entries:
+                    _stop = True
+                    break
+
+                # Bold 10pt rows are department headings.
                 if bold and abs(bold[0]["size"] - 10.0) < 0.6:
                     current_dept = split_camel("".join(w["text"] for w in bold))
                     continue
