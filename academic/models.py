@@ -27,6 +27,15 @@ class Faculty(models.Model):
     # Set when the record was matched against the official SU directory export.
     directory_verified = models.BooleanField(default=False)
     is_approved = models.BooleanField(default=False)
+    review_status = models.CharField(
+        max_length=16,
+        choices=[("pending", "Pending"), ("approved", "Approved"), ("rejected", "Rejected")],
+        default="pending",
+    )
+    review_note = models.TextField(blank=True, default="")
+    institutional_email = models.EmailField(blank=True, default="")
+    institutional_email_verified = models.BooleanField(default=False)
+    last_active = models.DateTimeField(null=True, blank=True)
     photo = models.ImageField(upload_to="faculty_photos/", blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -197,6 +206,10 @@ class NetworkInquiry(models.Model):
     shared_keywords = models.JSONField(default=list, blank=True)
     note = models.TextField(blank=True, default="")
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="new")
+    admin_notes = models.TextField(blank=True, default="")
+    message_subject = models.CharField(max_length=255, blank=True, default="")
+    source_type = models.CharField(max_length=32, blank=True, default="public")
+    reviewed_by = models.CharField(max_length=255, blank=True, default="")
 
     # Retained for abuse throttling on the unauthenticated endpoint.
     created_ip = models.GenericIPAddressField(null=True, blank=True)

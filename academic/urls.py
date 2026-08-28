@@ -3,6 +3,19 @@ from django.conf import settings
 from django.conf.urls.static import static
 from . import views
 from .auth import EmailOrUsernameTokenObtainPairView
+from .admin_views import (
+    admin_me,
+    admin_stats,
+    admin_faculty_list,
+    admin_faculty_detail,
+    admin_faculty_approve,
+    admin_faculty_reject,
+    admin_faculty_bulk_action,
+    admin_faculty_message,
+    admin_inquiries,
+    admin_inquiry_detail,
+    admin_audit_log,
+)
 from .network_views import (
     network_discovery,
     network_inquire,
@@ -41,6 +54,17 @@ urlpatterns = [
     path("semantic/papers/", semantic_paper_search, name="semantic-paper-search"),
     path("categories/", categories_list, name="categories-list"),
     path("query-expansions/", query_expansions, name="query-expansions"),
+    path("admin/me/", admin_me, name="admin-me"),
+    path("admin/stats/", admin_stats, name="admin-stats"),
+    path("admin/audit-log/", admin_audit_log, name="admin-audit-log"),
+    path("admin/faculty/", admin_faculty_list, name="admin-faculty-list"),
+    path("admin/faculty/bulk-action/", admin_faculty_bulk_action, name="admin-faculty-bulk"),
+    path("admin/faculty/<int:pk>/", admin_faculty_detail, name="admin-faculty-detail"),
+    path("admin/faculty/<int:pk>/approve/", admin_faculty_approve, name="admin-faculty-approve"),
+    path("admin/faculty/<int:pk>/reject/", admin_faculty_reject, name="admin-faculty-reject"),
+    path("admin/faculty/<int:pk>/message/", admin_faculty_message, name="admin-faculty-message"),
+    path("admin/inquiries/", admin_inquiries, name="admin-inquiries"),
+    path("admin/inquiries/<int:pk>/", admin_inquiry_detail, name="admin-inquiry-detail"),
     path("network/discovery/", network_discovery, name="network-discovery"),
     path("network/inquire/", network_inquire, name="network-inquire"),
     path("faculty/inquiries/", faculty_inquiries, name="faculty-inquiries"),
