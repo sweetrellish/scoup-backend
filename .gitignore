@@ -72,6 +72,7 @@ database-structrue.pdf
 scripts/
 data/
 docs/
+*.sh
 
 # Misc
 staticfiles/
