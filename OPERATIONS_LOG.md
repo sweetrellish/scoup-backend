@@ -92,6 +92,79 @@ Quick restore of a full site backup: use `~/scoupsite-pushv4.sh` → option `4` 
 
   Any process whose `cwd` ends in `(deleted)` is stale and safe to terminate.
 
+### 2026-08-28 14:04 — Backend feature work (search, categories, DEBUG)
+
+- **Restore ID:** `SRC-20260828-1404`
+- **Type:** Source code
+- **Artifacts (rollback copies of the pre-change file):**
+  - `~/scoup-backups/views.py.before-categories.*`
+  - `~/scoup-backups/views.py.before-rank.*`
+- **Files changed:**
+  - `academic/views.py` — ranked search + category endpoints
+  - `academic/urls.py` — route registration
+  - `scoupdb/settings.py` — DEBUG hardening
+- **Restore:**
+
+  ```bash
+  cp ~/scoup-backups/views.py.before-rank.<timestamp> \
+     /home/rellis/scoup-backend/academic/views.py
+  cd /home/rellis/scoup-backend && ./.venv/bin/python manage.py check
+  ```
+
+**1. Search relevance rewritten.** The previous fallback matched only
+`title__icontains` / `abstract__icontains` and **never searched `keywords`**, where the
+taxonomy actually lives. `"computer science"` matched just 2 papers, so the frontend padded
+results with loose matches — the source of the skew you reported.
+
+Replaced with weighted multi-field scoring:
+
+| Field | Weight | Rationale |
+| --- | --- | --- |
+| `title` | 5.0 | Author-written, most reliable |
+| `themes` | 3.0 | Specific topical tags |
+| `abstract` | 2.5 | Author-written |
+| `keywords` | 2.0 | Machine-assigned upstream, noisy |
+| `journal` | 1.0 | Weak signal |
+
+- All query terms must match (word-boundary, not substring), so partial matches on a
+  single common word like "science" no longer qualify.
+- Exact keyword match adds +25; phrase-in-title adds +15.
+- Results below confidence 30 are dropped rather than padded to fill `limit`.
+- Citations and recency are **tiebreakers only**, so they cannot outrank relevance.
+- Generic umbrella tags (`nec`, `, other`, `, general`, `Interdisciplinary computer sciences`)
+  are halved when they are the *only* evidence. Cause: the upstream classifier tags broadly —
+  e.g. "Mobile Journalism as Lifestyle Journalism?" carries `Interdisciplinary computer sciences`.
+- Responses now include `confidence` and `matchedOn` for explainability.
+
+**2. Categories implemented.** Replaced the hardcoded stub `{"categories": ["CS","Bio"]}`.
+Note `top/mid/low_level_categories` are **empty for every record**; the live taxonomy is in
+`Paper.keywords` and `Faculty.categories`, so the endpoints aggregate those.
+
+- `GET /api/categories/` → 333 categories with `paperCount`, `facultyCount`, `slug`.
+  Supports `?q=`, `?limit=`, `?min_count=`.
+- `GET /api/categories/<name-or-slug>/` → papers + faculty; 404 with `detail` if unknown.
+
+**3. `DEBUG` hardened.** Was `os.environ.get("DEBUG","") != "False"`, which defaulted to
+**True** and served full tracebacks publicly. Now secure by default (explicit opt-in only).
+Verified `settings.DEBUG` resolves to `False`.
+
+- **Verification:** `manage.py check` → 0 issues; `/api/categories/computer-science/` →
+  200, 31 papers / 87 faculty; unknown category → 404.
+- **Status:** Applied to the canonical repo. **Not yet deployed to `/var/www`.**
+
+### 2026-08-28 13:55 — Added backup deletion to deploy manager
+
+- **Restore ID:** `SCRIPT-20260828-135546`
+- **Type:** Tooling
+- **File changed:** `~/scoupsite-pushv4.sh`
+- **Artifact:** `~/scoup-backups/scripts/scoupsite-pushv4.sh.20260828-135546`
+- **Change:** Added menu option `8  Delete backups (free disk space)` with three modes —
+  delete by number, keep newest N, or delete older than N days.
+- **Safety:** Requires typing `DELETE` to confirm, **always protects the most recent backup**,
+  and logs every deletion to `~/.scoup-deploy.log`.
+- **Restore:** `cp ~/scoup-backups/scripts/scoupsite-pushv4.sh.20260828-135546 ~/scoupsite-pushv4.sh`
+- **Verification:** `bash -n` syntax check passed.
+
 ---
 
 ## Known open items

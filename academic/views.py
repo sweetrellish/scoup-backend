@@ -1,6 +1,7 @@
 import logging
 import re
 import uuid
+from collections import Counter
 from rest_framework.permissions import BasePermission
 
 
@@ -10,6 +11,7 @@ from django.db import transaction, DatabaseError
 from django.db.models import Q
 from django.db.utils import OperationalError, ProgrammingError
 from django.http import HttpResponse
+from django.utils.text import slugify
 from rest_framework import filters, generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import NotFound
@@ -459,6 +461,171 @@ def public_search_data(request):
                 "detail": "Internal server error."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+_SEARCH_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is",
+    "it", "of", "on", "or", "that", "the", "to", "with",
+}
+
+# Titles/abstracts are author-written and trustworthy. The `keywords` taxonomy is
+# machine-assigned upstream and noisy, so it is deliberately weighted lower.
+_FIELD_WEIGHTS = {
+    "title": 5.0,
+    "themes": 3.0,
+    "abstract": 2.5,
+    "keywords": 2.0,
+    "journal": 1.0,
+}
+
+# Umbrella tags the upstream classifier applies broadly; matching only these is weak evidence.
+_GENERIC_TAG_MARKERS = (
+    " nec",
+    ", other",
+    ", general",
+    "multidisciplinary interdisciplinary",
+    "interdisciplinary computer sciences",
+)
+
+_MIN_CONFIDENCE = 30.0
+
+
+def _tokenize_query(text):
+    tokens = [t for t in re.split(r"[^a-z0-9]+", (text or "").lower()) if t]
+    meaningful = [t for t in tokens if t not in _SEARCH_STOPWORDS and len(t) > 1]
+    return meaningful or tokens
+
+
+def _word_match(token, text):
+    if not text:
+        return False
+    return re.search(r"\b" + re.escape(token), text) is not None
+
+
+def _is_generic_tag(tag):
+    lowered = tag.lower()
+    return any(marker in lowered for marker in _GENERIC_TAG_MARKERS)
+
+
+def _paper_field_text(paper):
+    return {
+        "title": (paper.title or "").lower(),
+        "keywords": " ".join(_normalize_keyword_list(paper.keywords)).lower(),
+        "themes": " ".join(_normalize_keyword_list(paper.themes)).lower(),
+        "abstract": (paper.abstract or "").lower(),
+        "journal": (paper.journal or "").lower(),
+    }
+
+
+def _score_paper(paper, tokens, phrase):
+    """Return (confidence 0-100, matched field names) for a lexical match."""
+    fields = _paper_field_text(paper)
+    keyword_list = _normalize_keyword_list(paper.keywords)
+
+    matched_fields = set()
+    matched_tokens = 0
+    weight_sum = 0.0
+
+    for token in tokens:
+        token_weight = 0.0
+        for field_name, text in fields.items():
+            if _word_match(token, text):
+                token_weight = max(token_weight, _FIELD_WEIGHTS[field_name])
+                matched_fields.add(field_name)
+        if token_weight:
+            matched_tokens += 1
+            weight_sum += token_weight
+
+    if not matched_tokens:
+        return 0.0, []
+
+    coverage = matched_tokens / len(tokens)
+
+    # Every term must appear somewhere; partial matches are what produced unrelated
+    # results (e.g. "computer science" matching papers on "science" alone).
+    if len(tokens) > 1 and coverage < 1.0:
+        return 0.0, []
+
+    density = weight_sum / (matched_tokens * _FIELD_WEIGHTS["title"])
+    confidence = 100.0 * (0.55 * coverage + 0.45 * density)
+
+    exact_keyword = any(k.lower() == phrase for k in keyword_list)
+    if exact_keyword:
+        confidence += 25.0
+    elif phrase and len(tokens) > 1:
+        if phrase in fields["title"]:
+            confidence += 15.0
+        elif phrase in fields["themes"]:
+            confidence += 8.0
+        elif phrase in fields["abstract"]:
+            confidence += 6.0
+
+    # Matching only broad auto-assigned tags is weak evidence of true relevance.
+    if matched_fields == {"keywords"} and not exact_keyword:
+        hits = [k for k in keyword_list if any(_word_match(t, k.lower()) for t in tokens)]
+        if hits and all(_is_generic_tag(k) for k in hits):
+            confidence *= 0.5
+
+    return min(round(confidence, 2), 100.0), sorted(matched_fields)
+
+
+def _lexical_paper_search(query, limit):
+    """Weighted keyword ranking used when embeddings are unavailable."""
+    tokens = _tokenize_query(query)
+    if not tokens:
+        return []
+
+    phrase = " ".join(query.lower().split())
+
+    candidate_filter = Q()
+    for token in tokens:
+        candidate_filter |= (
+            Q(title__icontains=token)
+            | Q(abstract__icontains=token)
+            | Q(journal__icontains=token)
+            | Q(keywords__icontains=token)
+            | Q(themes__icontains=token)
+        )
+
+    candidates = Paper.objects.filter(candidate_filter).prefetch_related("authors")
+
+    scored = []
+    for paper in candidates:
+        confidence, matched_on = _score_paper(paper, tokens, phrase)
+        if confidence < _MIN_CONFIDENCE:
+            continue
+        year = _year_from_dates(
+            paper.date_published_online, paper.date_published_print, paper.date_published
+        )
+        scored.append((confidence, paper.tc_count or 0, year or 0, paper, matched_on))
+
+    # Citations and recency break ties only, so they cannot outrank relevance.
+    scored.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+
+    results = []
+    for confidence, citations, year, paper, matched_on in scored[:limit]:
+        results.append(
+            {
+                "id": str(paper.pk),
+                "title": paper.title or "",
+                "doi": paper.doi or "",
+                "journal": paper.journal or "",
+                "authors": [
+                    author.name
+                    or f"{author.first_name or ''} {author.last_name or ''}".strip()
+                    for author in paper.authors.all()
+                ],
+                "year": year,
+                "abstract": paper.abstract or "",
+                "link": paper.url or paper.download_url or paper.license_url or "",
+                "citations": citations,
+                "aiKeywords": _normalize_keyword_list(paper.keywords),
+                "matchedOn": matched_on,
+                "semanticScore": confidence,
+                "confidence": confidence,
+            }
+        )
+    return results
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def semantic_paper_search(request):
@@ -477,47 +644,14 @@ def semantic_paper_search(request):
     try:
         query_embedding = create_query_embedding(query, model=model)
     except Exception as exc:
-        # Embeddings unavailable (no/invalid OpenAI key, network, etc.)
-        # Fallback: plain keyword search
-        papers_qs = (
-            Paper.objects.filter(
-                Q(title__icontains=query) | Q(abstract__icontains=query)
-            )
-            .prefetch_related("authors")
-            .order_by("-id")[:limit]
-        )
-
-        results = []
-        for paper in papers_qs:
-            year = _year_from_dates(
-                paper.date_published_online, paper.date_published_print, paper.date_published
-            )
-            results.append(
-                {
-                    "id": str(paper.pk),
-                    "title": paper.title or "",
-                    "doi": paper.doi or "",
-                    "journal": paper.journal or "",
-                    "authors": [
-                        author.name
-                        or f"{author.first_name or ''} {author.last_name or ''}".strip()
-                        for author in paper.authors.all()
-                    ],
-                    "year": year or 0,
-                    "abstract": paper.abstract or "",
-                    "link": paper.url or paper.download_url or paper.license_url or "",
-                    "citations": paper.tc_count or 0,
-                    "semanticScore": 0.0,
-                }
-            )
-
+        results = _lexical_paper_search(query, limit)
         return Response(
             {
                 "query": query,
                 "model": model,
                 "count": len(results),
                 "results": results,
-                "detail": f"Embeddings unavailable; used keyword fallback. ({exc})",
+                "detail": f"Embeddings unavailable; used ranked keyword search. ({exc})",
             },
             status=status.HTTP_200_OK,
         )
@@ -600,6 +734,171 @@ def semantic_paper_search(request):
         }
     )
 
+
+
+def _category_counts():
+    """Aggregate the research taxonomy from paper keywords and faculty categories."""
+    paper_counts = Counter()
+    for values in Paper.objects.values_list("keywords", flat=True):
+        for name in _normalize_keyword_list(values):
+            paper_counts[name] += 1
+
+    faculty_counts = Counter()
+    faculty_qs = Faculty.objects.filter(profile_visibility=True).filter(
+        Q(is_approved=True) | Q(user__isnull=False)
+    )
+    for values in faculty_qs.values_list("categories", flat=True):
+        for name in _normalize_keyword_list(values):
+            faculty_counts[name] += 1
+
+    return paper_counts, faculty_counts
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def categories_list(request):
+    try:
+        paper_counts, faculty_counts = _category_counts()
+
+        search = (request.query_params.get("q") or "").strip().lower()
+        try:
+            min_count = max(0, int(request.query_params.get("min_count", 1)))
+        except (TypeError, ValueError):
+            min_count = 1
+
+        categories = []
+        for name in set(paper_counts) | set(faculty_counts):
+            if search and search not in name.lower():
+                continue
+            papers = paper_counts.get(name, 0)
+            faculty = faculty_counts.get(name, 0)
+            if papers + faculty < min_count:
+                continue
+            categories.append(
+                {
+                    "name": name,
+                    "slug": slugify(name),
+                    "paperCount": papers,
+                    "facultyCount": faculty,
+                    "totalCount": papers + faculty,
+                }
+            )
+
+        categories.sort(key=lambda item: (-item["totalCount"], item["name"]))
+
+        limit_param = request.query_params.get("limit")
+        if limit_param:
+            try:
+                categories = categories[: max(1, int(limit_param))]
+            except (TypeError, ValueError):
+                pass
+
+        return Response(
+            {"categories": categories, "count": len(categories)},
+            status=status.HTTP_200_OK,
+        )
+    except Exception as exc:
+        logger.exception("categories_list failed: %s", exc)
+        return Response(
+            {"error": "service_unavailable", "detail": "Internal server error."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def category_detail(request, category):
+    try:
+        target = (category or "").strip()
+        target_slug = slugify(target)
+        paper_counts, faculty_counts = _category_counts()
+
+        matched_name = None
+        for name in set(paper_counts) | set(faculty_counts):
+            if name.lower() == target.lower() or slugify(name) == target_slug:
+                matched_name = name
+                break
+
+        if matched_name is None:
+            return Response(
+                {
+                    "category": target,
+                    "papers": [],
+                    "faculty": [],
+                    "count": 0,
+                    "detail": "Unknown category.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        needle = matched_name.lower()
+
+        papers = []
+        for paper in Paper.objects.prefetch_related("authors"):
+            names = {n.lower() for n in _normalize_keyword_list(paper.keywords)}
+            if needle not in names:
+                continue
+            year = _year_from_dates(
+                paper.date_published_online,
+                paper.date_published_print,
+                paper.date_published,
+            )
+            papers.append(
+                {
+                    "id": str(paper.pk),
+                    "title": paper.title or "",
+                    "doi": paper.doi or "",
+                    "journal": paper.journal or "",
+                    "year": year or 0,
+                    "citations": paper.tc_count or 0,
+                    "authors": [
+                        author.name
+                        or f"{author.first_name or ''} {author.last_name or ''}".strip()
+                        for author in paper.authors.all()
+                    ],
+                }
+            )
+        papers.sort(key=lambda item: (item["year"], item["citations"]), reverse=True)
+
+        faculty = []
+        faculty_qs = Faculty.objects.filter(profile_visibility=True).filter(
+            Q(is_approved=True) | Q(user__isnull=False)
+        )
+        for member in faculty_qs:
+            names = {n.lower() for n in _normalize_keyword_list(member.categories)}
+            if needle not in names:
+                continue
+            faculty.append(
+                {
+                    "id": str(member.faculty_id),
+                    "name": _full_name(
+                        member.first_name,
+                        member.last_name,
+                        (member.name or "").strip() or member.faculty_id,
+                    ),
+                    "department": member.department or "",
+                    "title": member.title or "",
+                }
+            )
+        faculty.sort(key=lambda item: item["name"])
+
+        return Response(
+            {
+                "category": matched_name,
+                "slug": slugify(matched_name),
+                "papers": papers,
+                "faculty": faculty,
+                "count": len(papers),
+                "facultyCount": len(faculty),
+            },
+            status=status.HTTP_200_OK,
+        )
+    except Exception as exc:
+        logger.exception("category_detail failed: %s", exc)
+        return Response(
+            {"error": "service_unavailable", "detail": "Internal server error."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 def home(request):

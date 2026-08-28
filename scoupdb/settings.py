@@ -7,7 +7,8 @@ PROJECT_ROOT = BASE_DIR.parent
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key")
 
-DEBUG = os.environ.get("DEBUG", "") != "False"
+# Secure by default: debug must be explicitly opted into, never left on in production.
+DEBUG = os.environ.get("DEBUG", "False").strip().lower() in {"1", "true", "yes", "on"}
 
 ALLOWED_HOSTS = ["*"]
 

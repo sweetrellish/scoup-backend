@@ -5,6 +5,8 @@ from . import views
 from .auth import EmailOrUsernameTokenObtainPairView
 from .views import (
     approve_faculty_suggestion,
+    categories_list,
+    category_detail,
     FacultyListCreateView,
     FacultyDetailView,
     faculty_me,
@@ -28,7 +30,10 @@ from rest_framework_simplejwt.views import (
 urlpatterns = [
     path('', views.home, name='home'),
     path("public/search-data/", public_search_data, name="public-search-data"),
+    path("search/", semantic_paper_search, name="paper-search"),
     path("semantic/papers/", semantic_paper_search, name="semantic-paper-search"),
+    path("categories/", categories_list, name="categories-list"),
+    path("categories/<str:category>/", category_detail, name="category-detail"),
 
     path('faculty/', FacultyListCreateView.as_view(), name='faculty-list'),
     path('faculty/<int:pk>/', FacultyDetailView.as_view(), name='faculty-detail'),
