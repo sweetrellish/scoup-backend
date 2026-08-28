@@ -240,10 +240,35 @@ Observed spread for "machine learning": 96.3 / 83.2 / 73.2 / 60.1 (was all 100.0
   would fix this.
 - **Status:** In repo, NOT yet deployed.
 
+### 2026-08-28 15:12 - Phrase-proximity experiment REVERTED
+
+- **Restore ID:** `SRC-20260828-1512`
+- **Type:** Source code (reverted)
+- **File:** `academic/views.py` restored from `~/scoup-backups/views.py.before-prox.150337`
+
+**Attempted:** phrase-proximity scoring (`_best_proximity`) so query terms had to co-occur within
+one field, to stop matches like "computer" in a journal name plus "science" in a theme tag.
+
+**Result: rejected.** Two variants were tested and both underperformed:
+
+| Variant | Effect |
+| --- | --- |
+| additive bonus | inflated loose matches ("How CPR is like Madonna" 80.2 -> 90.2) |
+| multiplier | regressed a genuinely relevant paper (Self-Supervised Sensor Learning 83.2 -> 62.4) |
+
+Root cause: relevant papers often mention query terms far apart in long abstracts, so span-based
+proximity punishes true positives as hard as false ones.
+
+**Action:** reverted to the deployed ranking. Repo and `/var/www` now match; no redeploy required.
+Verified "computer science" 91.1/80.2/80.0/78.4 and "machine learning" 96.3/83.2/73.2/73.2,
+identical to live.
+
+**Future approach:** proper fix is a phrase/bigram index or embeddings (`OPENAI_API_KEY`), not
+character-span heuristics.
+
 ---
 
 ## Known open items
-
 
 | # | Item | Severity | Status |
 | --- | --- | --- | --- |

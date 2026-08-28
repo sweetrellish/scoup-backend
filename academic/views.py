@@ -545,28 +545,6 @@ def _paper_field_text(paper):
     }
 
 
-def _best_proximity(fields, tokens):
-    """Smallest character span containing every term within a single field.
-
-    Returns None when no single field holds all terms, which means the match is
-    only an artifact of terms scattered across unrelated fields.
-    """
-    best = None
-    for text in fields.values():
-        positions = []
-        for token in tokens:
-            match = re.search(r"\b" + re.escape(token), text)
-            if not match:
-                positions = None
-                break
-            positions.append(match.start())
-        if positions:
-            span = max(positions) - min(positions)
-            if best is None or span < best:
-                best = span
-    return best
-
-
 def _score_paper(paper, tokens, phrase):
     """Return (confidence 0-100, matched field names) for a lexical match."""
     fields = _paper_field_text(paper)
@@ -605,7 +583,7 @@ def _score_paper(paper, tokens, phrase):
 
     exact_keyword = any(k.lower() == phrase for k in keyword_list)
     if exact_keyword:
-        confidence += 6.0
+        confidence += 12.0
     if phrase and len(tokens) > 1:
         if phrase in fields["title"]:
             confidence += 12.0
@@ -613,19 +591,6 @@ def _score_paper(paper, tokens, phrase):
             confidence += 6.0
         elif phrase in fields["abstract"]:
             confidence += 3.0
-
-    # Terms must co-occur in one field; otherwise the match is incidental
-    # (e.g. "computer" in the journal name and "science" in a theme tag).
-    if len(tokens) > 1:
-        span = _best_proximity(fields, tokens)
-        if span is None:
-            confidence *= 0.55
-        elif span <= 30:
-            confidence *= 1.0
-        elif span <= 150:
-            confidence *= 0.88
-        else:
-            confidence *= 0.75
 
     # Matching only broad auto-assigned tags is weak evidence of true relevance.
     if matched_fields == {"keywords"} and not exact_keyword:
