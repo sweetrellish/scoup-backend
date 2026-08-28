@@ -209,7 +209,6 @@ record, so top-level grouping is derived from the segment before the first comma
 
 ## Known open items
 
-
 | # | Item | Severity | Status |
 | --- | --- | --- | --- |
 | 1 | `DEBUG` resolves to `True` in production; tracebacks are publicly exposed | High (security) | Open |
