@@ -266,6 +266,58 @@ identical to live.
 **Future approach:** proper fix is a phrase/bigram index or embeddings (`OPENAI_API_KEY`), not
 character-span heuristics.
 
+### 2026-08-28 17:39 - SU directory ingestion + faculty enrichment
+
+- **Restore ID:** `DB-20260828-1734` (database) / `SRC-20260828-1739` (source)
+- **Type:** Data + source
+- **Artifacts:**
+  - `~/scoup-backups/db.sqlite3.pre-directory.*`
+  - `~/scoup-backups/models.py.before-directory.*`
+  - `~/scoup-backups/views.py.before-srcprofile-fix.*`
+- **Files added:** `academic/directory_parser.py`,
+  `academic/management/commands/import_su_directory.py`,
+  `academic/migrations/0007_faculty_directory_verified.py`
+
+**1. `SUdirectory.pdf` parsed.** The PDF has two sections: pages 1-42 list staff by department
+(bold 10pt headers, fixed columns at x=54 name / 152 title / 418 room / 524 extension), and
+pages 43+ repeat everything alphabetically with department folded into the title field. Parsing
+by font weight and column position yields **1,849 entries across 132 departments**. Parsing stops
+at the section boundary; an earlier text-only parser mis-assigned 1,814 rows to "Writing Center"
+because wrapped title fragments looked like department headers.
+
+**2. Faculty enrichment applied.** `import_su_directory` matches on last name plus first name
+(exact) or first initial, and fills only blank fields unless `--overwrite` is passed. Dry-run is
+the default.
+
+| Result | Count |
+| --- | --- |
+| matched exact | 95 |
+| matched by initial | 126 |
+| ambiguous (needs admin review) | 96 |
+| unmatched | 1,317 |
+| **records updated** | **221** |
+
+`title`, `department`, `room`, and `phone` now populate for 221 faculty and surface in
+`/api/public/search-data/` (222 records now carry a department, up from ~0).
+
+**3. Key insight for admin validation.** Only ~244 of 1,634 Faculty rows correspond to real SU
+directory people. The rest are **external co-authors** imported from the publication dataset.
+The new `directory_verified` boolean marks records confirmed against the official directory and
+is the natural basis for the admin validation queue.
+
+**4. Latent crash fixed.** Migration `0006` (authored outside this session) removed
+`Faculty.source_profile`, but `_absorb_external_faculty()` in `views.py` still referenced it -
+approving a faculty suggestion would have raised `AttributeError`. Those lines were removed.
+
+**5. Scoring fields already exist.** Migrations 0005/0006 added `expertise`, `academic`,
+`practice`, `publication` to Faculty - these map to the Acad/Prac/Pub bars in the Interlora
+screenshots. `collaboration` and `network` do not yet exist.
+
+- **Verification:** `manage.py check` clean; `/api/public/search-data/`, `/api/categories/`,
+  `/api/query-expansions/` all 200.
+- **Status:** In repo + repo DB. **NOT yet deployed;** the live DB also needs
+  `manage.py migrate` and a directory import run.
+
 ---
 
 ## Known open items

@@ -149,21 +149,8 @@ class Command(BaseCommand):
             for field, value in changes.items():
                 setattr(faculty, field, value)
 
-            profile = faculty.source_profile if isinstance(faculty.source_profile, dict) else {}
-            profile["su_directory"] = {
-                "matched_on": confidence,
-                "title": match["title"],
-                "department": match["department"],
-                "room": match["room"],
-                "phone_ext": match["phone_ext"],
-                "synced_at": now.isoformat(),
-            }
-            faculty.source_profile = profile
             faculty.directory_verified = True
-            faculty.save(
-                update_fields=list(changes)
-                + ["source_profile", "directory_verified", "updated_at"]
-            )
+            faculty.save(update_fields=list(changes) + ["directory_verified", "updated_at"])
             written += 1
 
         self.stdout.write(self.style.SUCCESS(f"updated {written} faculty records"))

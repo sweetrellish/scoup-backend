@@ -165,12 +165,6 @@ def _absorb_external_faculty(internal, external):
         _merge_unique_list(internal.ai_keywords, external.ai_keywords)
     )
 
-    merged_source_profile = {}
-    if isinstance(external.source_profile, dict):
-        merged_source_profile.update(external.source_profile)
-    if isinstance(internal.source_profile, dict):
-        merged_source_profile.update(internal.source_profile)
-    internal.source_profile = merged_source_profile
     internal.total_citations = max(internal.total_citations or 0, external.total_citations or 0)
     internal.article_count = max(internal.article_count or 0, external.article_count or 0)
     internal.average_citations = max(
