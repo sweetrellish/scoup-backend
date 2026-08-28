@@ -505,14 +505,66 @@ def _is_generic_tag(tag):
     return any(marker in lowered for marker in _GENERIC_TAG_MARKERS)
 
 
+# Abstracts in this dataset embed author/affiliation boilerplate (e.g. "Department of
+# Math and Computer Science, Salisbury University"), which produced false keyword matches.
+_AFFILIATION_LINE = re.compile(
+    r"\b(department|dept\.?|school|college|institute|laborator(?:y|ies)|centre|center)\b"
+    r".*\b(universit|college|institute)",
+    re.IGNORECASE,
+)
+_BOILERPLATE_HEADER = re.compile(
+    r"^\s*\**\s*(affiliations?|authors?|doi|cited by|notes on contributors|"
+    r"additional information|acknowledge?ments?)\s*:?\s*\**\s*$",
+    re.IGNORECASE,
+)
+
+
+def _clean_abstract(text):
+    if not text:
+        return ""
+    kept = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _BOILERPLATE_HEADER.match(stripped):
+            continue
+        if _AFFILIATION_LINE.search(stripped):
+            continue
+        kept.append(stripped)
+    return " ".join(kept)
+
+
 def _paper_field_text(paper):
     return {
         "title": (paper.title or "").lower(),
         "keywords": " ".join(_normalize_keyword_list(paper.keywords)).lower(),
         "themes": " ".join(_normalize_keyword_list(paper.themes)).lower(),
-        "abstract": (paper.abstract or "").lower(),
+        "abstract": _clean_abstract(paper.abstract).lower(),
         "journal": (paper.journal or "").lower(),
     }
+
+
+def _best_proximity(fields, tokens):
+    """Smallest character span containing every term within a single field.
+
+    Returns None when no single field holds all terms, which means the match is
+    only an artifact of terms scattered across unrelated fields.
+    """
+    best = None
+    for text in fields.values():
+        positions = []
+        for token in tokens:
+            match = re.search(r"\b" + re.escape(token), text)
+            if not match:
+                positions = None
+                break
+            positions.append(match.start())
+        if positions:
+            span = max(positions) - min(positions)
+            if best is None or span < best:
+                best = span
+    return best
 
 
 def _score_paper(paper, tokens, phrase):
@@ -544,19 +596,36 @@ def _score_paper(paper, tokens, phrase):
     if len(tokens) > 1 and coverage < 1.0:
         return 0.0, []
 
+    # depth: how strong the best field was for each matched term
     density = weight_sum / (matched_tokens * _FIELD_WEIGHTS["title"])
-    confidence = 100.0 * (0.55 * coverage + 0.45 * density)
+    # breadth: how many independent fields corroborate the match
+    breadth = sum(_FIELD_WEIGHTS[f] for f in matched_fields) / sum(_FIELD_WEIGHTS.values())
+
+    confidence = 100.0 * (0.45 * density + 0.25 * breadth + 0.30 * coverage)
 
     exact_keyword = any(k.lower() == phrase for k in keyword_list)
     if exact_keyword:
-        confidence += 25.0
-    elif phrase and len(tokens) > 1:
+        confidence += 6.0
+    if phrase and len(tokens) > 1:
         if phrase in fields["title"]:
-            confidence += 15.0
+            confidence += 12.0
         elif phrase in fields["themes"]:
-            confidence += 8.0
-        elif phrase in fields["abstract"]:
             confidence += 6.0
+        elif phrase in fields["abstract"]:
+            confidence += 3.0
+
+    # Terms must co-occur in one field; otherwise the match is incidental
+    # (e.g. "computer" in the journal name and "science" in a theme tag).
+    if len(tokens) > 1:
+        span = _best_proximity(fields, tokens)
+        if span is None:
+            confidence *= 0.55
+        elif span <= 30:
+            confidence *= 1.0
+        elif span <= 150:
+            confidence *= 0.88
+        else:
+            confidence *= 0.75
 
     # Matching only broad auto-assigned tags is weak evidence of true relevance.
     if matched_fields == {"keywords"} and not exact_keyword:

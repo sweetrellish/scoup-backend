@@ -205,9 +205,45 @@ record, so top-level grouping is derived from the segment before the first comma
 - **Verification:** `manage.py check` clean; expansions 200 JSON; unknown API route 404.
 - **Status:** In repo, NOT yet deployed.
 
+### 2026-08-28 14:46 - Search relevance: affiliation stripping + confidence calibration
+
+- **Restore ID:** `SRC-20260828-1446`
+- **Type:** Source code
+- **Artifacts:** `~/scoup-backups/views.py.before-affil.*`, `~/scoup-backups/views.py.before-calib.*`
+- **File changed:** `academic/views.py`
+
+**1. Affiliation boilerplate stripped.** Abstracts in this dataset embed author/affiliation
+blocks, e.g. *"Department of Math and Computer Science, Salisbury University, 1101 Camden Ave"*.
+A salt-marsh paper therefore ranked for "computer science". Added `_clean_abstract()`, which drops
+lines matching a department+institution pattern and boilerplate headers (Affiliations, Authors,
+DOI, Cited by, Notes on contributors, Acknowledgements) before scoring. Only offending lines are
+removed, not the whole abstract.
+
+**2. Confidence recalibrated.** Scores previously saturated at 100.0, making ranking meaningless.
+Now blends three signals:
+
+| Signal | Weight | Meaning |
+| --- | --- | --- |
+| density | 0.45 | strength of the best field per matched term |
+| breadth | 0.25 | how many independent fields corroborate |
+| coverage | 0.30 | share of query terms matched |
+
+Bonuses: exact keyword +12, phrase-in-title +12, phrase-in-themes +6, phrase-in-abstract +3.
+
+Observed spread for "machine learning": 96.3 / 83.2 / 73.2 / 60.1 (was all 100.0).
+
+- **Verification:** `manage.py check` clean. "computer science" no longer returns the salt-marsh
+  or geography papers; top hits are Computer-Assisted Data, Information Influence, LAX-Score,
+  information systems.
+- **Known limitation:** scoring is bag-of-words, so a multi-word concept can still score via
+  separate fields (e.g. "computer" in journal, "science" in themes). Phrase-proximity scoring
+  would fix this.
+- **Status:** In repo, NOT yet deployed.
+
 ---
 
 ## Known open items
+
 
 | # | Item | Severity | Status |
 | --- | --- | --- | --- |
