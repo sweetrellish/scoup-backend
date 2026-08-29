@@ -17,13 +17,14 @@ from datetime import timedelta
 from io import StringIO
 from pathlib import Path
 
-from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
-STATE_FILE = Path(settings.BASE_DIR) / "data" / "validation_state.json"
+# settings.BASE_DIR points at the settings package, not the repo root.
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+STATE_FILE = PROJECT_ROOT / "data" / "validation_state.json"
 LOCK_FILE = Path("/tmp/scoup-validation.lock")
 
 # (name, command, args, needs_apply). Order is the dependency order:
