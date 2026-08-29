@@ -1362,12 +1362,14 @@ regardless of browser, cache, or network.
 | 9 | `patentsData` / `projectsData` are empty, so those panels render zeros | Low | Open - Projects page now states this explicitly rather than showing a placeholder |
 | 10 | Frontend bundle is 1.1 MB; needs code-splitting | Low | Open |
 | 11 | `/var/www/.../templates` is `drwxr-x--- root root`, unreadable by the service | Low | Open |
-| 12 | Public faculty profile **backend** endpoint built (`/api/faculty/<id>/public/`); frontend page still needed | Medium | Partly resolved |
+| 12 | Public faculty profile **backend** endpoint built (`/api/faculty/<id>/public/`); frontend page still needed | Medium | **Resolved** 2026-08-29 - `/faculty/<id>` page built and linked from Experts, Networks, Capabilities and Browse; see the frontend log entry for 18:35. In repo, not deployed |
 | 13 | Validation worker built; systemd timer not yet installed on the server | Medium | Partly resolved |
 | 14 | 6,062 of 9,237 papers have no linked author (legacy dataset has no institution filter); they cannot surface on a profile and pollute search/category corpus | High | Open |
 | 15 | 3,630 papers have no abstract; sampled OpenAlex re-fetch found 0/170 recoverable (closed-access, not an import bug) | Medium | Open, likely unrecoverable via OpenAlex |
 | 16 | `Paper.faculty_affiliations` is `{}` on all 9,237 papers, so affiliations can only be scraped from abstract text | Medium | Open - limits institution and co-author analysis |
 | 17 | `FRONTEND_ORIGINS` / CORS in `scoupdb/settings.py` is hardcoded with no environment override, so a dev server must run on port 3000 | Low | Open |
+| 19 | Home-page search cannot link to a profile: `/api/public/search-data/` returns `faculty_id` slugs, not the pk the profile endpoint takes. Adding the pk to that payload would let `SearchResults`/`FacultySlideOver` link too | Low | Open - found 2026-08-29 while building the profile page |
+| 20 | `GET /api/contact/settings/` does not exist, but the frontend `/docs` page calls it on every load and gets a 404 | Low | Open - found 2026-08-29 |
 | 18 | The repo virtualenv `/home/rellis/scoup-backend/.venv` was missing, so `scoup-backend-staging.service` could not start | Medium | Resolved 2026-08-29 - rebuilt from requirements.txt |
 
 **Resolved:** full OpenAlex backfill, category granularity, DEBUG exposure, categories stub, search relevance, repo/deploy divergence,
