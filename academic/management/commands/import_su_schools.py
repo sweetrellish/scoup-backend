@@ -5,25 +5,12 @@ Dry-run by default; use --apply to write.
 """
 
 import json
-import re
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 
+from academic.directory_match import SchoolResolver
 from academic.models import Faculty
-
-
-def normalize(value):
-    """Fold case, punctuation and the and/& spelling difference between sources."""
-    text = (value or "").lower().replace("&", " and ")
-    text = re.sub(r"\band\b", " ", text)
-    return re.sub(r"[^a-z]", "", text)
-
-
-def first_token(value):
-    tokens = re.findall(r"[a-z]+", (value or "").lower())
-    tokens = [t for t in tokens if t not in {"the", "of", "and", "department", "school", "program"}]
-    return tokens[0][:7] if tokens else ""
 
 
 class Command(BaseCommand):
@@ -40,36 +27,16 @@ class Command(BaseCommand):
 
         mapping = json.loads(path.read_text())
 
-        lookup = {}
-        dept_names = {}
-        for school, departments in mapping.items():
-            for dept in departments:
-                lookup[normalize(dept)] = school
-                dept_names[dept] = school
+        # Shared with the admin review queue so an approved directory match and a
+        # bulk import resolve the same department to the same school.
+        resolver = SchoolResolver(mapping)
 
         matched = 0
         unmatched = {}
         planned = []
 
         for member in Faculty.objects.exclude(department__isnull=True).exclude(department=""):
-            dept_key = normalize(member.department)
-            school = lookup.get(dept_key)
-
-            if school is None:
-                # Directory names differ slightly, e.g. "Marketing Department".
-                for key, value in lookup.items():
-                    if key and (key in dept_key or dept_key in key):
-                        school = value
-                        break
-
-            if school is None:
-                # "Mathematics" vs "Mathematical Sciences" style stem differences.
-                stem = first_token(member.department)
-                if stem:
-                    for dept_name, value in dept_names.items():
-                        if first_token(dept_name) == stem:
-                            school = value
-                            break
+            school = resolver.resolve(member.department)
 
             if school is None:
                 unmatched[member.department] = unmatched.get(member.department, 0) + 1

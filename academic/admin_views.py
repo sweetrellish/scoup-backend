@@ -10,15 +10,22 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
+from .directory_match import resolve_school, review_evidence
 from .models import Faculty, NetworkInquiry, Paper, Patent, Project
 from .views import _full_name, _normalize_keyword_list, _su_affiliated
 
 logger = logging.getLogger(__name__)
 
 
-def _serialize_admin_faculty(member):
+def _serialize_admin_faculty(member, with_evidence=False):
+    """Serialize a Faculty row for the admin dashboard.
+
+    `with_evidence` attaches the SU-directory match evidence behind the record's
+    pending status, so a reviewer can see which directory row it matched and why
+    that match was not strong enough to auto-verify.
+    """
     user = member.user
-    return {
+    payload = {
         "id": member.pk,
         "name": _full_name(
             member.first_name,
@@ -33,6 +40,11 @@ def _serialize_admin_faculty(member):
         "last_login": user.last_login.isoformat() if user and user.last_login else None,
         "last_active": member.last_active.isoformat() if member.last_active else None,
         "primary_department": member.department or "",
+        "primary_school": member.school or "",
+        "room": member.room or "",
+        "phone": member.phone or "",
+        "orcid": member.orcid or "",
+        "openalex_id": member.openalex_id or "",
         "departments": _normalize_keyword_list(member.department_affiliations)
         or ([member.department] if member.department else []),
         "title": member.title or "",
@@ -46,6 +58,14 @@ def _serialize_admin_faculty(member):
         "created_at": member.created_at.isoformat(),
         "updated_at": member.updated_at.isoformat(),
     }
+    if with_evidence:
+        payload["review_evidence"] = review_evidence(
+            member,
+            paper_titles=list(
+                member.papers.order_by("-date_published").values_list("title", flat=True)[:5]
+            ),
+        )
+    return payload
 
 
 @api_view(["GET", "PATCH"])
@@ -159,8 +179,21 @@ def admin_faculty_list(request):
     except (TypeError, ValueError):
         limit = 200
 
+    # The review queue is unusable without the directory match behind each pending
+    # row, so evidence is attached automatically there. It is a dict lookup against
+    # a cached parse, not a query, so it costs nothing per record.
+    want_evidence = (request.query_params.get("include_evidence") or "").lower() == "true"
+
+    members = list(
+        qs.order_by("last_name", "first_name")[:limit]
+    )
     return Response(
-        [_serialize_admin_faculty(m) for m in qs.order_by("last_name", "first_name")[:limit]],
+        [
+            _serialize_admin_faculty(
+                m, with_evidence=want_evidence or m.review_status == "pending"
+            )
+            for m in members
+        ],
         status=status.HTTP_200_OK,
     )
 
@@ -191,7 +224,9 @@ def admin_faculty_detail(request, pk):
         if changed:
             member.save(update_fields=changed + ["updated_at"])
 
-    return Response(_serialize_admin_faculty(member), status=status.HTTP_200_OK)
+    return Response(
+        _serialize_admin_faculty(member, with_evidence=True), status=status.HTTP_200_OK
+    )
 
 
 def _set_review(member, new_status, reason, reviewer):
@@ -208,14 +243,80 @@ def _set_review(member, new_status, reason, reviewer):
     )
 
 
+def _apply_directory_match(member, reviewer):
+    """Write the reviewer-confirmed directory row onto the Faculty record.
+
+    These records are pending precisely because the importer refused to write a
+    first-initial-only match. Approving one is the admin asserting the identity,
+    so the directory fields it was denied are filled in and the record becomes
+    directory_verified. Provenance goes in review_note so a wrong call stays
+    traceable - the failure mode that produced the Shing Yip Lee -> Physics bug.
+
+    Returns the applied field names, or None when there is no single candidate.
+    """
+    evidence = review_evidence(member)
+    match = evidence.get("best_match")
+    if not match:
+        return None
+
+    applied = []
+    for field, value in (
+        ("title", match["title"]),
+        ("department", match["department"]),
+        ("room", match["room"]),
+        ("phone", match["phone_ext"]),
+    ):
+        if value and getattr(member, field, None) != value:
+            setattr(member, field, value)
+            applied.append(field)
+
+    school = resolve_school(match["department"])
+    if school and member.school != school:
+        member.school = school
+        applied.append("school")
+
+    member.directory_verified = True
+    applied.append("directory_verified")
+    member.review_note = (
+        f"Directory match confirmed by {reviewer}: "
+        f"{match['first_name']} {match['last_name']} - {match['title']}, "
+        f"{match['department']} ({evidence['match_type']} match)."
+    )[:2000]
+    applied.append("review_note")
+
+    member.save(update_fields=applied + ["updated_at"])
+    return applied
+
+
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
 def admin_faculty_approve(request, pk):
     member = Faculty.objects.filter(pk=pk).first()
     if not member:
         return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
-    _set_review(member, "approved", "", request.user.get_username())
-    return Response(_serialize_admin_faculty(member), status=status.HTTP_200_OK)
+
+    data = request.data if isinstance(request.data, dict) else {}
+    reviewer = request.user.get_username()
+
+    applied = None
+    if data.get("apply_directory_match"):
+        applied = _apply_directory_match(member, reviewer)
+        if applied is None:
+            return Response(
+                {
+                    "detail": (
+                        "No single directory row matches this record, so there is "
+                        "nothing to apply. Approve without apply_directory_match, or "
+                        "edit the record directly."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    _set_review(member, "approved", "", reviewer)
+    payload = _serialize_admin_faculty(member, with_evidence=True)
+    payload["applied_fields"] = applied or []
+    return Response(payload, status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])

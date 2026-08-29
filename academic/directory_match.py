@@ -219,3 +219,67 @@ def review_evidence(faculty, paper_titles=None):
     if paper_titles is not None:
         result["recent_papers"] = paper_titles
     return result
+
+
+SCHOOLS_SOURCE = REPO_ROOT / "data" / "su_schools.json"
+
+
+def _school_key(value):
+    """Fold case, punctuation and the and/& spelling difference between sources."""
+    text = (value or "").lower().replace("&", " and ")
+    text = re.sub(r"\band\b", " ", text)
+    return re.sub(r"[^a-z]", "", text)
+
+
+def _first_token(value):
+    tokens = re.findall(r"[a-z]+", (value or "").lower())
+    tokens = [t for t in tokens if t not in {"the", "of", "and", "department", "school", "program"}]
+    return tokens[0][:7] if tokens else ""
+
+
+class SchoolResolver:
+    """Map a department name to its parent college/school.
+
+    The directory PDF and salisbury.edu spell departments differently
+    ("Marketing Department" vs "Marketing", "Mathematics" vs "Mathematical
+    Sciences"), so resolution falls back from exact key, to substring, to a
+    first-token stem. Returns None rather than a nearest guess.
+    """
+
+    def __init__(self, mapping):
+        self.lookup = {}
+        self.dept_names = {}
+        for school, departments in mapping.items():
+            for dept in departments:
+                self.lookup[_school_key(dept)] = school
+                self.dept_names[dept] = school
+
+    def resolve(self, department):
+        if not department:
+            return None
+        key = _school_key(department)
+        school = self.lookup.get(key)
+        if school:
+            return school
+
+        for candidate, value in self.lookup.items():
+            if candidate and (candidate in key or key in candidate):
+                return value
+
+        stem = _first_token(department)
+        if stem:
+            for dept_name, value in self.dept_names.items():
+                if _first_token(dept_name) == stem:
+                    return value
+        return None
+
+
+def school_resolver():
+    with _lock:
+        if "schools" not in _cache:
+            _cache["schools"] = SchoolResolver(_load_json(SCHOOLS_SOURCE, {}))
+        return _cache["schools"]
+
+
+def resolve_school(department):
+    return school_resolver().resolve(department)
