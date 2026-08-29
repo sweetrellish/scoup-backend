@@ -3,7 +3,14 @@
 import uuid
 from rest_framework import serializers
 
-from academic.models import Faculty, Paper, Patent, Project
+from academic.models import (
+    ContactSettings,
+    ContactTeamMember,
+    Faculty,
+    Paper,
+    Patent,
+    Project,
+)
 
 
 class EmptyStringToNoneDateField(serializers.DateField):
@@ -138,3 +145,65 @@ class PatentSerializer(serializers.ModelSerializer):
         validated_data.pop("assignee", None)
         validated_data.pop("keywords", None)
         return super().update(instance, validated_data)
+
+
+class ContactTeamMemberSerializer(serializers.ModelSerializer):
+    """Contact-page team member.
+
+    Field names are passed through unchanged - the admin editor PATCHes exactly
+    these keys, so any renaming here would silently drop edits.
+    """
+
+    class Meta:
+        model = ContactTeamMember
+        fields = [
+            "id",
+            "name",
+            "role",
+            "description",
+            "email",
+            "linkedin_url",
+            "photo",
+            "order",
+            "is_visible",
+        ]
+        # Photo is set through the dedicated upload endpoint, not this serializer,
+        # because the editor sends it as multipart on a separate request.
+        read_only_fields = ["id", "photo"]
+
+
+class ContactSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContactSettings
+        fields = [
+            "general_email",
+            "support_email",
+            "github_url",
+            "backend_github_url",
+            "linkedin_url",
+            "documentation_url",
+            "api_documentation_url",
+            "documentation_links",
+            "address_line_1",
+            "address_line_2",
+            "address_line_3",
+        ]
+
+    def validate_documentation_links(self, value):
+        """Only accept the {title, description, url} card shape the docs page renders."""
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Expected a list of documentation cards.")
+        cleaned = []
+        for index, item in enumerate(value):
+            if not isinstance(item, dict):
+                raise serializers.ValidationError(
+                    f"Card {index + 1} must be an object with title, description and url."
+                )
+            cleaned.append(
+                {
+                    "title": str(item.get("title", ""))[:255],
+                    "description": str(item.get("description", ""))[:1000],
+                    "url": str(item.get("url", ""))[:500],
+                }
+            )
+        return cleaned

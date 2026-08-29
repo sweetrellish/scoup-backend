@@ -1385,6 +1385,99 @@ visible, just not smeared across a fake single day.
   to GitHub** - `~/.ssh/id_ed25519` needs the user's passphrase, same as the earlier profile-page
   work; live site already has the code since it was built directly from the working tree.
 
+### 2026-08-29 18:55 - Contact page backend built (models, migration, six endpoints)
+
+- **Restore ID:** `DB-20260829-184157` / `SRC-20260829-1855`
+- **Type:** Source code + schema
+- **Artifacts:** `~/scoup-backups/db.sqlite3.before-contact.20260829-184157`
+- **Files added:** `academic/contact_views.py`,
+  `academic/migrations/0012_contactsettings_contactteammember.py`
+- **Files changed:** `academic/models.py`, `academic/serializers.py`, `academic/urls.py`,
+  `academic/tests.py`
+- **Restore:**
+
+  ```bash
+  cd /home/rellis/scoup-backend
+  ./.venv/bin/python manage.py migrate academic 0011
+  git checkout -- academic/models.py academic/serializers.py academic/urls.py academic/tests.py
+  rm academic/contact_views.py academic/migrations/0012_contactsettings_contactteammember.py
+  ```
+
+Closes open item #20. The Contact feature had a complete frontend - `contactAPI` in
+`src/utils/api.ts`, a public `Contact.tsx`, a `Documentation.tsx` that reads the same
+settings, and a full `admin/ContactPageEditor.tsx` - and **no backend at all**, so `/contact`
+and `/docs` 404'd on every page load.
+
+**Field names were read off the frontend, not designed here.** `ContactPageEditor` PATCHes a
+fixed set of keys and `Contact.tsx`/`Documentation.tsx` read a fixed set back, so the
+serializer is a straight pass-through; renaming anything would have silently dropped edits.
+
+| Model | Fields |
+| --- | --- |
+| `ContactTeamMember` | `name`, `role`, `description`, `email`, `linkedin_url`, `photo`, `order`, `is_visible` |
+| `ContactSettings` | `general_email`, `support_email`, `github_url`, `backend_github_url`, `linkedin_url`, `documentation_url`, `api_documentation_url`, `documentation_links[]`, `address_line_1/2/3` |
+
+Note the team member field is **`role`, not `title`**, and there is **no phone field** - the
+`Phone` icon on the public page labels the *support email* card, not a phone number. Both were
+checked in the JSX rather than assumed.
+
+`ContactSettings` is a singleton: `save()` pins `pk=1`, `delete()` raises, and `load()`
+`get_or_create`s it. The public GET therefore returns a **blank row rather than a 404** on a
+fresh install, which is what lets `/contact` render before an admin has ever opened the editor.
+
+| Route | Auth | Behaviour |
+| --- | --- | --- |
+| `GET /api/contact/team/` | `AllowAny` | visible members only, in `order` then `name` |
+| `GET /api/contact/settings/` | `AllowAny` | the singleton row, created blank on first read |
+| `GET/POST /api/admin/contact/team/` | `IsAdminUser` | list includes hidden members; create |
+| `PATCH/DELETE /api/admin/contact/team/<id>/` | `IsAdminUser` | partial update; 404, not 500, on a missing id |
+| `PATCH /api/admin/contact/settings/` | `IsAdminUser` | partial update |
+| `POST /api/admin/contact/team/<id>/photo/` | `IsAdminUser` | multipart `photo` part, matching `adminUploadPhoto` |
+
+**Nothing was seeded.** Zero team members and one blank settings row - an honest starting
+state the admin fills in through the UI. No placeholder names, no invented addresses.
+
+`documentation_links` is validated to the `{title, description, url}` card shape the docs page
+renders; a malformed payload is a 400 and nothing is stored, rather than a JSON blob that
+breaks the page later.
+
+- **Verification:**
+  - Test suite **31 -> 48**: public defaults, the exact key set the frontend reads, hidden-member
+    filtering and ordering, 401 anonymous / 403 non-staff on every admin route, create-edit-delete,
+    missing-name 400, missing-id 404, singleton invariance across repeated saves, malformed
+    `documentation_links` rejection, and photo upload (stored path, absolute URL, 400 with no file,
+    401 anonymous).
+  - Curl round trip on a **throwaway copy** of the database (`DATABASE_URL` pointed at
+    `/tmp/scoup-contact-test.sqlite3`, dev server on :9123): public GETs 200 with blank/empty
+    defaults, all six admin routes 401 anonymous, then a JWT-authenticated create -> 201,
+    PATCH -> 200, hide -> public list empties, settings PATCH -> public GET reflects it,
+    photo upload -> 200.
+  - **Driven through the real admin UI headlessly** (Playwright, system Chromium, production
+    bundle served with an `/api` proxy so it is same-origin exactly as in production):
+    logged in, opened *Contact & Links*, added "Ada Lovelace" with a photo, edited the role,
+    saved page settings and a documentation card. `/contact` then rendered the member, the
+    general email and the address; `/docs` rendered the card. **Zero API 4xx on either public
+    page**, where before every load produced a 404.
+- **Repo database:** migration applied; **0 members, 0 settings rows** (the row is created on
+  first read). No production data touched.
+- **Status:** In repo. **NOT deployed** - `/var/www` untouched by instruction.
+
+**Found while verifying - not introduced here, needs a decision.** Nginx has **no `/media/`
+location** (`/etc/nginx/sites-enabled/scoup2025-dist.conf`), so `/media/...` falls through to
+the SPA route and returns `index.html` with HTTP 200:
+
+```
+$ curl -o /dev/null -w "%{http_code} %{content_type}" https://scoup-salisbury.net/media/faculty_photos/anything.png
+200 text/html
+```
+
+Django only serves media when `DEBUG=True`, which it correctly is not. So an uploaded team
+photo is stored and its URL is returned correctly, but **no browser can fetch it**. This is
+pre-existing and affects `FacultyPhotoUploadView` identically - it simply has not shown up
+because no faculty photo has ever been uploaded (`photo` is empty on all 182 visible faculty).
+Fixing it means adding an nginx `location /media/` alias to `scoupdb/media/` and reloading -
+a root-level server change, so it is recorded as open item #21 rather than done silently.
+
 ---
 
 ## Known open items
@@ -1406,8 +1499,9 @@ visible, just not smeared across a fake single day.
 | 15 | 3,630 papers have no abstract; sampled OpenAlex re-fetch found 0/170 recoverable (closed-access, not an import bug) | Medium | Open, likely unrecoverable via OpenAlex |
 | 16 | `Paper.faculty_affiliations` is `{}` on all 9,237 papers, so affiliations can only be scraped from abstract text | Medium | Open - limits institution and co-author analysis |
 | 17 | `FRONTEND_ORIGINS` / CORS in `scoupdb/settings.py` is hardcoded with no environment override, so a dev server must run on port 3000 | Low | Open |
-| 19 | Home-page search cannot link to a profile: `/api/public/search-data/` returns `faculty_id` slugs, not the pk the profile endpoint takes. Adding the pk to that payload would let `SearchResults`/`FacultySlideOver` link too | Low | Open - found 2026-08-29 while building the profile page |
-| 20 | `GET /api/contact/settings/` does not exist, but the frontend `/docs` page calls it on every load and gets a 404 | Low | Open - found 2026-08-29 |
+| 19 | Home-page search cannot link to a profile: `/api/public/search-data/` returns `faculty_id` slugs, not the pk the profile endpoint takes. Adding the pk to that payload would let `SearchResults`/`FacultySlideOver` link too | Low | **Resolved** 2026-08-29 - `profileId` added to the payload (commit `ac37ffc`) and both components now link through it; see the frontend log for 18:50 |
+| 20 | `GET /api/contact/settings/` does not exist, but the frontend `/docs` page calls it on every load and gets a 404 | Low | **Resolved** 2026-08-29 - whole Contact backend built; see the 18:55 entry |
+| 21 | Nginx has no `location /media/`, so uploaded photos return `index.html` (200 text/html) instead of the file. Affects contact team photos **and** faculty photos | Medium | Open - needs a root nginx change + reload |
 | 18 | The repo virtualenv `/home/rellis/scoup-backend/.venv` was missing, so `scoup-backend-staging.service` could not start | Medium | Resolved 2026-08-29 - rebuilt from requirements.txt |
 
 **Resolved:** full OpenAlex backfill, category granularity, DEBUG exposure, categories stub, search relevance, repo/deploy divergence,

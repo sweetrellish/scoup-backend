@@ -17,6 +17,14 @@ from .admin_views import (
     admin_inquiry_detail,
     admin_audit_log,
 )
+from .contact_views import (
+    admin_contact_settings,
+    admin_contact_team,
+    admin_contact_team_detail,
+    admin_contact_team_photo,
+    contact_settings,
+    contact_team,
+)
 from .reference_views import (
     institutions_list,
     facilities_list,
@@ -70,6 +78,20 @@ urlpatterns = [
     path("admin/faculty/<int:pk>/message/", admin_faculty_message, name="admin-faculty-message"),
     path("admin/inquiries/", admin_inquiries, name="admin-inquiries"),
     path("admin/inquiries/<int:pk>/", admin_inquiry_detail, name="admin-inquiry-detail"),
+    path("contact/team/", contact_team, name="contact-team"),
+    path("contact/settings/", contact_settings, name="contact-settings"),
+    path("admin/contact/team/", admin_contact_team, name="admin-contact-team"),
+    path(
+        "admin/contact/team/<int:pk>/",
+        admin_contact_team_detail,
+        name="admin-contact-team-detail",
+    ),
+    path(
+        "admin/contact/team/<int:pk>/photo/",
+        admin_contact_team_photo,
+        name="admin-contact-team-photo",
+    ),
+    path("admin/contact/settings/", admin_contact_settings, name="admin-contact-settings"),
     path("institutions/", institutions_list, name="institutions-list"),
     path("facilities/", facilities_list, name="facilities-list"),
     path("network/discovery/", network_discovery, name="network-discovery"),

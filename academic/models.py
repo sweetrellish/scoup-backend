@@ -227,3 +227,80 @@ class NetworkInquiry(models.Model):
 
     def __str__(self):
         return f"{self.requester_name or self.requester_email} -> {self.target_faculty_name}"
+
+
+class ContactTeamMember(models.Model):
+    """A person listed on the public /contact page.
+
+    Field names mirror what `src/components/Contact.tsx` and
+    `src/components/admin/ContactPageEditor.tsx` already read and send, so the
+    serializer is a straight pass-through with no renaming.
+    """
+
+    name = models.CharField(max_length=255)
+    role = models.CharField(max_length=255, blank=True, default="")
+    description = models.TextField(blank=True, default="")
+    email = models.EmailField(blank=True, default="")
+    linkedin_url = models.URLField(max_length=500, blank=True, default="")
+    photo = models.ImageField(upload_to="contact_team/", blank=True, null=True)
+
+    # Admin-controlled ordering; ties fall back to name so the list is stable.
+    order = models.IntegerField(default=0)
+    # Hidden members stay in the admin list but are dropped from the public feed.
+    is_visible = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["order", "name"]
+
+    def __str__(self):
+        return self.name
+
+
+class ContactSettings(models.Model):
+    """Page-level settings for /contact and /docs.
+
+    A single row, always pk=1. `load()` creates it blank on first read rather
+    than seeding placeholder text - an empty field is an honest "not filled in
+    yet", and the frontend already supplies its own display fallbacks.
+    """
+
+    general_email = models.EmailField(blank=True, default="")
+    support_email = models.EmailField(blank=True, default="")
+
+    github_url = models.URLField(max_length=500, blank=True, default="")
+    backend_github_url = models.URLField(max_length=500, blank=True, default="")
+    linkedin_url = models.URLField(max_length=500, blank=True, default="")
+    documentation_url = models.URLField(max_length=500, blank=True, default="")
+    api_documentation_url = models.URLField(max_length=500, blank=True, default="")
+
+    # List of {title, description, url} cards rendered on the Documentation page.
+    documentation_links = models.JSONField(default=list, blank=True)
+
+    address_line_1 = models.CharField(max_length=255, blank=True, default="")
+    address_line_2 = models.CharField(max_length=255, blank=True, default="")
+    address_line_3 = models.CharField(max_length=255, blank=True, default="")
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = "contact settings"
+
+    def save(self, *args, **kwargs):
+        # Pin to a single row so a second settings record cannot be created.
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        # The public page always needs a row to read; deleting it would 500.
+        raise NotImplementedError("ContactSettings is a singleton and cannot be deleted.")
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return "Contact page settings"

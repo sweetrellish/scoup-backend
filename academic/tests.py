@@ -5,10 +5,12 @@ Focused on the admin faculty review queue: the 126 records left pending by
 Runs against Django's throwaway test database; db.sqlite3 is never touched.
 """
 
+import base64
 import json
 from datetime import date
 
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -19,7 +21,7 @@ from academic.directory_match import (
     normalize,
     resolve_school,
 )
-from academic.models import Faculty, Paper
+from academic.models import ContactSettings, ContactTeamMember, Faculty, Paper
 
 
 class DirectoryMatchTests(TestCase):
@@ -321,3 +323,201 @@ class SearchFilterTests(TestCase):
     def test_unparseable_filters_are_ignored_rather_than_failing(self):
         body = self._search("limit=50&year_min=abc&min_citations=&sort=bogus")
         self.assertEqual(body["filters"], {"sort": "relevance"})
+
+
+def _one_pixel_png():
+    """Smallest valid PNG - ImageField runs a real image check on upload."""
+    return base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    )
+
+
+class ContactEndpointTests(TestCase):
+    """Public contact/docs feeds, and the admin editor's CRUD behind them."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="contact-admin", password="test-pass-1234", is_staff=True
+        )
+        self.admin_client = APIClient()
+        self.admin_client.force_authenticate(self.admin)
+        self.anon = APIClient()
+
+    # --- public ---------------------------------------------------------
+
+    def test_public_settings_returns_a_blank_row_not_404(self):
+        """A fresh install has no settings row; /contact must still render."""
+        response = self.anon.get("/api/contact/settings/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["general_email"], "")
+        self.assertEqual(response.json()["documentation_links"], [])
+
+    def test_public_settings_exposes_every_field_the_frontend_reads(self):
+        expected = {
+            "general_email",
+            "support_email",
+            "github_url",
+            "backend_github_url",
+            "linkedin_url",
+            "documentation_url",
+            "api_documentation_url",
+            "documentation_links",
+            "address_line_1",
+            "address_line_2",
+            "address_line_3",
+        }
+        self.assertEqual(set(self.anon.get("/api/contact/settings/").json()), expected)
+
+    def test_public_team_is_an_empty_list_when_nothing_is_configured(self):
+        response = self.anon.get("/api/contact/team/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_public_team_hides_invisible_members_and_honours_order(self):
+        ContactTeamMember.objects.create(name="Second", order=2)
+        ContactTeamMember.objects.create(name="First", order=1)
+        ContactTeamMember.objects.create(name="Hidden", order=0, is_visible=False)
+
+        names = [m["name"] for m in self.anon.get("/api/contact/team/").json()]
+        self.assertEqual(names, ["First", "Second"])
+
+    def test_public_member_carries_the_keys_contact_page_renders(self):
+        ContactTeamMember.objects.create(name="Dev", role="Engineer", email="d@example.com")
+        member = self.anon.get("/api/contact/team/").json()[0]
+        for key in ("id", "name", "role", "description", "email", "linkedin_url", "photo"):
+            self.assertIn(key, member)
+        # `photo` is null rather than "" so the frontend's `member.photo || ""` holds.
+        self.assertIsNone(member["photo"])
+
+    # --- admin auth -----------------------------------------------------
+
+    def test_anonymous_cannot_reach_any_admin_contact_route(self):
+        self.assertEqual(self.anon.get("/api/admin/contact/team/").status_code, 401)
+        self.assertEqual(self.anon.post("/api/admin/contact/team/", {}).status_code, 401)
+        self.assertEqual(self.anon.patch("/api/admin/contact/settings/", {}).status_code, 401)
+
+    def test_non_staff_cannot_reach_admin_contact_routes(self):
+        client = APIClient()
+        client.force_authenticate(User.objects.create_user(username="plain-contact", password="x"))
+        self.assertEqual(client.get("/api/admin/contact/team/").status_code, 403)
+
+    # --- admin CRUD -----------------------------------------------------
+
+    def test_admin_team_list_includes_hidden_members(self):
+        ContactTeamMember.objects.create(name="Hidden", is_visible=False)
+        self.assertEqual(len(self.admin_client.get("/api/admin/contact/team/").json()), 1)
+
+    def test_admin_can_create_edit_and_delete_a_member(self):
+        created = self.admin_client.post(
+            "/api/admin/contact/team/",
+            {
+                "name": "Ada Lovelace",
+                "role": "Lead Engineer",
+                "description": "Builds the thing.",
+                "email": "ada@example.com",
+                "linkedin_url": "https://linkedin.com/in/ada",
+                "order": 3,
+                "is_visible": True,
+            },
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201)
+        member_id = created.json()["id"]
+
+        patched = self.admin_client.patch(
+            f"/api/admin/contact/team/{member_id}/",
+            {"role": "Principal Engineer", "is_visible": False},
+            format="json",
+        )
+        self.assertEqual(patched.status_code, 200)
+        self.assertEqual(patched.json()["role"], "Principal Engineer")
+        # Hiding a member removes them from the public feed but not the admin list.
+        self.assertEqual(self.anon.get("/api/contact/team/").json(), [])
+        self.assertEqual(len(self.admin_client.get("/api/admin/contact/team/").json()), 1)
+
+        self.assertEqual(
+            self.admin_client.delete(f"/api/admin/contact/team/{member_id}/").status_code, 204
+        )
+        self.assertEqual(ContactTeamMember.objects.count(), 0)
+
+    def test_creating_a_member_without_a_name_is_rejected(self):
+        response = self.admin_client.post("/api/admin/contact/team/", {}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.json())
+
+    def test_editing_a_missing_member_is_404_not_500(self):
+        self.assertEqual(
+            self.admin_client.patch(
+                "/api/admin/contact/team/9999/", {"name": "x"}, format="json"
+            ).status_code,
+            404,
+        )
+
+    # --- admin settings -------------------------------------------------
+
+    def test_admin_can_save_settings_and_the_public_route_serves_them(self):
+        response = self.admin_client.patch(
+            "/api/admin/contact/settings/",
+            {
+                "general_email": "scoup@salisbury.edu",
+                "address_line_1": "Salisbury University",
+                "documentation_links": [
+                    {"title": "Frontend", "description": "Overview", "url": "https://example.com/f"}
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        public = self.anon.get("/api/contact/settings/").json()
+        self.assertEqual(public["general_email"], "scoup@salisbury.edu")
+        self.assertEqual(public["address_line_1"], "Salisbury University")
+        self.assertEqual(public["documentation_links"][0]["title"], "Frontend")
+
+    def test_settings_stay_a_single_row_however_many_saves_happen(self):
+        self.admin_client.patch(
+            "/api/admin/contact/settings/", {"general_email": "a@example.com"}, format="json"
+        )
+        self.admin_client.patch(
+            "/api/admin/contact/settings/", {"general_email": "b@example.com"}, format="json"
+        )
+        self.assertEqual(ContactSettings.objects.count(), 1)
+        self.assertEqual(self.anon.get("/api/contact/settings/").json()["general_email"], "b@example.com")
+
+    def test_malformed_documentation_links_are_rejected_not_stored(self):
+        response = self.admin_client.patch(
+            "/api/admin/contact/settings/",
+            {"documentation_links": ["just a string"]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(ContactSettings.load().documentation_links, [])
+
+    # --- photo upload ---------------------------------------------------
+
+    def test_photo_upload_stores_the_file_and_returns_an_absolute_url(self):
+        member = ContactTeamMember.objects.create(name="Ada")
+        upload = SimpleUploadedFile("ada.png", _one_pixel_png(), content_type="image/png")
+
+        response = self.admin_client.post(
+            f"/api/admin/contact/team/{member.pk}/photo/", {"photo": upload}, format="multipart"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["photo"].startswith("http"))
+
+        member.refresh_from_db()
+        self.assertTrue(member.photo.name.startswith("contact_team/"))
+        member.photo.delete(save=False)
+
+    def test_photo_upload_without_a_file_is_a_400(self):
+        member = ContactTeamMember.objects.create(name="Ada")
+        response = self.admin_client.post(
+            f"/api/admin/contact/team/{member.pk}/photo/", {}, format="multipart"
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_anonymous_cannot_upload_a_photo(self):
+        member = ContactTeamMember.objects.create(name="Ada")
+        self.assertEqual(
+            self.anon.post(f"/api/admin/contact/team/{member.pk}/photo/", {}).status_code, 401
+        )
