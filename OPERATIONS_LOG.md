@@ -912,6 +912,65 @@ and routes to `/admin-dashboard` on success.
 
 - **Status:** Live password updated. Dashboard awaiting your sign-in to validate.
 
+### 2026-08-29 13:56 - Search word-boundary bug fixed (deployed)
+
+- **Restore ID:** `SRC-20260829-1356`
+- **File changed:** `academic/views.py` (`_word_match`)
+- **Commit:** `aa8b3ca` (applied by Claude Code, running in parallel per the user's
+  request to keep work moving when this assistant reaches its limit)
+
+**Reported symptom:** searching "AI" returned "Method for Comparing Concentrations of the
+Open-Air Factor" (1973, Porton Down, England) as a **100% match**, alongside other papers
+whose author affiliations say "Salisbury" (the English city) rather than "Salisbury University".
+
+**Root cause found - not an affiliation/data problem, a regex bug.** `_word_match()` built its
+pattern as `r"\b" + re.escape(token)`, with **no trailing `\b`**. A leading-boundary-only
+pattern for `"ai"` matches the start of `"air"` (bounded by the hyphen in `"open-air"`) and never
+checks that the match also ends at a word boundary, so `"AI"` silently matched inside `"Air"`,
+`"CS"` inside `"cost"`, etc., for every short (2-3 letter) query term. This inflated confidence to
+100 for completely unrelated papers, which is what made the false result look authoritative.
+
+Fix: `r"\b" + re.escape(token) + r"\b"`.
+
+| Query vs. text | Before | After |
+| --- | --- | --- |
+| "ai" vs "open-air factor" | **True (bug)** | False |
+| "cs" vs "physics course" | **True (bug)** | False |
+| "ai" vs "artificial intelligence (ai)" | True | True |
+
+**On the underlying data.** The Open-Air Factor paper (and ~2,836 other pre-1990 records) come
+from the original legacy dataset (`import_full_dataset`), which has **no institution filter at
+all** - unlike `import_openalex`, which scopes to OpenAlex institution `I9364636`. These records
+have empty `faculty_affiliations` and no linked `authors`, so they were never counted toward
+faculty metrics, but they do sit in the searchable corpus. This is the same population already
+tracked as **item #14** (6,062 papers with no linked author) - the word-boundary bug is what let
+them surface with a misleadingly high score; the presence of off-topic legacy records in the
+corpus is a separate, still-open data-quality issue.
+
+- **Verification:** unit-level regex tests pass; deployed to live and confirmed -
+  `GET /api/search/?q=AI` no longer returns the Open-Air Factor paper; top results are genuine
+  AI papers (conversational agents, ML-based HR systems) scoring 94.4 / 89.x.
+- **Status:** Deployed to `/var/www` and restarted. Code-only change; no migration required.
+
+### 2026-08-29 14:03 - Superuser cleanup
+
+- **Restore ID:** `DB-20260829-1401`
+- **Artifact:** `~/scoup-backups/db.sqlite3.pre-userscleanup.*`
+
+Removed all users except `rellis` from both the repo and live databases, at the user's request.
+
+| Username | Reason removed |
+| --- | --- |
+| `ryan` | Seed superuser created by `ensure_superuser.py`; never logged in |
+| `opeade` | Superuser with real login history (2025-11-17) - user confirmed removal |
+| `opefaculty` | Non-staff test account; cascaded 1 linked Faculty row |
+| `tife22` | Non-staff test account; cascaded 1 linked Faculty row |
+
+`ensure_superuser.py` is not invoked by any deploy step or systemd unit, so `ryan` will not be
+silently recreated. `rellis` is now the sole user in both databases.
+
+- **Status:** Applied to repo DB and live DB.
+
 ---
 
 ## Known open items
@@ -929,7 +988,7 @@ and routes to `/admin-dashboard` on success.
 | 11 | `/var/www/.../templates` is `drwxr-x--- root root`, unreadable by the service | Low | Open |
 | 12 | No **public** faculty profile page; only the authenticated self-service dashboard exists | Medium | Open |
 | 13 | Validation worker built; systemd timer not yet installed on the server | Medium | Partly resolved |
-| 14 | 6,062 of 9,237 papers have no linked author, so they cannot surface on any profile | High | Open |
+| 14 | 6,062 of 9,237 papers have no linked author (legacy dataset has no institution filter); they cannot surface on a profile and pollute search/category corpus | High | Open |
 | 15 | 3,630 papers have no abstract, weakening search recall | Medium | Open |
 
 **Resolved:** full OpenAlex backfill, category granularity, DEBUG exposure, categories stub, search relevance, repo/deploy divergence,
