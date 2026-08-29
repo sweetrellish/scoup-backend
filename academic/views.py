@@ -379,6 +379,14 @@ def public_search_data(request):
             year = _year_from_dates(
                 item.date_published_online, item.date_published_print, item.date_published
             )
+            # Jan 1st is what the original import defaulted to when only a year was
+            # known (653 papers share this exact date). Flag it so charts can bucket
+            # by year without faking a day-level trend.
+            date_precise = not (
+                item.date_published
+                and item.date_published.month == 1
+                and item.date_published.day == 1
+            )
             papers.append(
                 {
                     "id": str(item.pk),
@@ -391,6 +399,7 @@ def public_search_data(request):
                         for author in item.authors.all()
                     ],
                     "year": year or 0,
+                    "datePrecise": date_precise,
                     "abstract": item.abstract or "",
                     # keep the rest of your paper fields here...
                 }
