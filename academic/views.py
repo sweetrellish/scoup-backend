@@ -490,7 +490,8 @@ def _tokenize_query(text):
 def _word_match(token, text):
     if not text:
         return False
-    return re.search(r"\b" + re.escape(token), text) is not None
+    # Missing trailing \b let "AI" match inside "Air" (e.g. "Open-Air Factor").
+    return re.search(r"\b" + re.escape(token) + r"\b", text) is not None
 
 
 def _is_generic_tag(tag):
