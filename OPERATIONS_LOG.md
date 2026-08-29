@@ -521,6 +521,69 @@ Center.
 - **Verification:** `manage.py check` clean; discovery returns correct school per colleague.
 - **Status:** In repo + repo DB. **NOT yet deployed** - live needs `migrate` for `0010`.
 
+### 2026-08-29 09:40 - Facilities + Institutions datasets
+
+- **Restore ID:** `SRC-20260829-0940`
+- **Files added:** `data/su_facilities.json`, `data/institutions.json`
+
+**Facilities (37).** Parsed from `discover-su/campus-map/about-salisbury-facilities.aspx`:
+Holloway Hall, Perdue Hall, Devilbiss Hall, Henson Science Hall, Guerrieri Academic Commons,
+Nabb Research Center, Maggs Physical Activities Center, Sea Gull Stadium, etc.
+
+**Building codes were NOT obtained.** The page has no systematic code list - the only
+abbreviations present were noise (`ATM`, `GIS`, `NMR`). Room prefixes in the directory
+(`HH`, `PH`, `DH`, `HS`, `AC`, `TE`, `GSU`) can be inferred by initials, but that would be a
+guess, so no code mapping was written. Facilities can currently be listed, not joined to people.
+
+**Institutions (149) derived from paper affiliations,** not scraped - the correct source, as
+external institutions only appear there.
+
+| Institution | Mentions |
+| --- | --- |
+| Salisbury University | 117 |
+| Vanderbilt University | 13 |
+| Rensselaer Polytechnic | 7 |
+| University of Illinois | 7 |
+| University of Maryland Eastern Shore | 6 |
+
+**Known extraction noise** to clean before shipping an Institutions page: names bleed into
+matches ("Dean J. Kotlowski Salisbury University"), and multi-part names truncate
+("University of Foreign Studies" from "Hankuk University of Foreign Studies").
+
+- **Status:** Data files only. No model, endpoint or migration yet.
+
+### 2026-08-29 09:50 - Deploy no longer overwrites the live database (CRITICAL)
+
+- **Restore ID:** `SRC-20260829-0950`
+- **Artifact:** `~/scoup-backups/scoupsite-pushv4.sh.before-rsync.*`
+- **Files changed:** `~/scoupsite-pushv4.sh`
+- **File added:** `data/su_building_codes.json` (105 codes)
+
+**The fix.** `deploy()` ran `cp -r "$BACKEND_SRC" "$DOMAIN_DIR/scoup-backend"`, which copied
+`db.sqlite3` over production on every deploy. Any faculty signup, photo upload, CV upload or
+network inquiry created on the live site would have been destroyed by the next push. Replaced
+with `rsync -a --delete` excluding `db.sqlite3`, `media/`, `.venv/`, `.git/` and `__pycache__/`.
+
+Excluding `.git/` also stops the deployed copy from carrying the GitHub remote, which is what
+made `/var/www` appear "ahead 4" and caused the VS Code sync confusion.
+
+**WORKFLOW CHANGE - important.** Schema and data changes no longer reach production by riding
+along in the copied database. After each deploy:
+
+```bash
+cd /var/www/scoup2025.privatedns.org/scoup-backend
+sudo -u www-data ./.venv/bin/python manage.py migrate
+```
+
+Data imports (`import_su_directory`, `import_su_schools`) must also be run against the live
+database, not just locally.
+
+**Building codes (105)** extracted from `campus-map/building-info.aspx`: AC=Academic Commons,
+HH=Holloway Hall, PH=Perdue Hall, DH=Devilbiss Hall, CK=Choptank Hall, etc. This is the join key
+that was missing yesterday, so room numbers in the directory can now resolve to building names.
+
+- **Verification:** `bash -n` passes; `rsync` present on host.
+
 ---
 
 ## Known open items
