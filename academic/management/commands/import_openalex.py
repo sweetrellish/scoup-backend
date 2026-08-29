@@ -4,6 +4,7 @@ OpenAlex is free, CC0-licensed and has a documented API, so this replaces scrapi
 Dry-run by default; use --apply to write.
 """
 
+import re
 import time
 from datetime import date
 
@@ -40,6 +41,74 @@ def parse_date(value):
         return date.fromisoformat(value) if value else None
     except (TypeError, ValueError):
         return None
+
+
+class AuthorResolver:
+    """Resolve an OpenAlex authorship to a Faculty row.
+
+    Tries ORCID, then OpenAlex author id, then exact name, then last name plus
+    first initial - which is what "A. Shakur" vs "Asif Shakur" requires.
+    """
+
+    def __init__(self):
+        self.by_orcid = {}
+        self.by_openalex = {}
+        self.by_name = {}
+        self.by_initial = {}
+
+        for member in Faculty.objects.all():
+            if member.orcid:
+                self.by_orcid[self._norm_orcid(member.orcid)] = member
+            if member.openalex_id:
+                self.by_openalex[member.openalex_id] = member
+
+            names = [
+                (member.name or "").strip().lower(),
+                f"{member.first_name or ''} {member.last_name or ''}".strip().lower(),
+            ]
+            for name in filter(None, names):
+                self.by_name.setdefault(name, member)
+
+            last = (member.last_name or "").strip().lower()
+            first = (member.first_name or "").strip().lower()
+            if not last and member.name:
+                parts = member.name.split()
+                if len(parts) > 1:
+                    first, last = parts[0].lower(), parts[-1].lower()
+            if last and first:
+                # Ambiguous initials must not silently pick the wrong person.
+                key = (last, first[0])
+                if key in self.by_initial and self.by_initial[key] is not member:
+                    self.by_initial[key] = None
+                else:
+                    self.by_initial.setdefault(key, member)
+
+    @staticmethod
+    def _norm_orcid(value):
+        return (value or "").replace("https://orcid.org/", "").strip().upper()
+
+    def resolve(self, authorship):
+        author = authorship.get("author") or {}
+
+        orcid = self._norm_orcid(author.get("orcid"))
+        if orcid and orcid in self.by_orcid:
+            return self.by_orcid[orcid], "orcid"
+
+        oa_id = (author.get("id") or "").rsplit("/", 1)[-1]
+        if oa_id and oa_id in self.by_openalex:
+            return self.by_openalex[oa_id], "openalex"
+
+        display = (author.get("display_name") or "").strip().lower()
+        if display and display in self.by_name:
+            return self.by_name[display], "name"
+
+        parts = [p for p in re.split(r"[^a-z]+", display) if p]
+        if len(parts) >= 2:
+            match = self.by_initial.get((parts[-1], parts[0][0]))
+            if match is not None:
+                return match, "initial"
+
+        return None, ""
 
 
 class Command(BaseCommand):
@@ -90,14 +159,8 @@ class Command(BaseCommand):
         institution = opts["institution"]
         mailto = opts["mailto"]
 
-        # Index existing faculty by name so SU authorships can be linked.
-        faculty_by_name = {}
-        for member in Faculty.objects.all():
-            for key in filter(None, [
-                (member.name or "").strip().lower(),
-                f"{member.first_name or ''} {member.last_name or ''}".strip().lower(),
-            ]):
-                faculty_by_name.setdefault(key, member)
+        resolver = AuthorResolver()
+        match_methods = {}
 
         existing = set(Paper.objects.values_list("doi", flat=True))
 
@@ -118,6 +181,7 @@ class Command(BaseCommand):
             best_oa = work.get("best_oa_location") or {}
 
             su_authors = []
+            su_authorships = []
             for authorship in work.get("authorships", []):
                 if not any(
                     inst.get("id", "").endswith(institution)
@@ -127,6 +191,7 @@ class Command(BaseCommand):
                 name = (authorship.get("author") or {}).get("display_name") or ""
                 if name:
                     su_authors.append(name)
+                    su_authorships.append(authorship)
 
             fields = {
                 "title": (work.get("title") or "")[:500],
@@ -145,11 +210,14 @@ class Command(BaseCommand):
                 updated += 1
             else:
                 created += 1
-            to_write.append((doi, fields, su_authors))
+            to_write.append((doi, fields, su_authorships))
 
-            for name in su_authors:
-                if name.strip().lower() not in faculty_by_name:
-                    new_authors.add(name)
+            for authorship in su_authorships:
+                member, method = resolver.resolve(authorship)
+                if member is None:
+                    new_authors.add((authorship.get("author") or {}).get("display_name") or "")
+                else:
+                    match_methods[method] = match_methods.get(method, 0) + 1
 
         self.stdout.write(f"institution        : {institution}")
         self.stdout.write(f"works fetched      : {created + updated}")
@@ -157,6 +225,10 @@ class Command(BaseCommand):
         self.stdout.write(f"  existing (update): {updated}")
         self.stdout.write(f"skipped (no DOI)   : {skipped_no_doi}")
         self.stdout.write(f"SU authors unknown to the DB: {len(new_authors)}")
+        if match_methods:
+            self.stdout.write(
+                "resolved by -> " + ", ".join(f"{k}: {v}" for k, v in sorted(match_methods.items()))
+            )
 
         for name in sorted(new_authors)[:10]:
             self.stdout.write(f"   unmatched author: {name}")
@@ -166,13 +238,28 @@ class Command(BaseCommand):
             return
 
         with transaction.atomic():
-            for doi, fields, su_authors in to_write:
+            for doi, fields, su_authorships in to_write:
                 paper, _ = Paper.objects.update_or_create(doi=doi, defaults=fields)
-                for name in su_authors:
-                    member = faculty_by_name.get(name.strip().lower())
-                    if member:
-                        paper.authors.add(member)
-                        linked += 1
+                for authorship in su_authorships:
+                    member, _method = resolver.resolve(authorship)
+                    if member is None:
+                        continue
+                    paper.authors.add(member)
+                    linked += 1
+
+                    # Persist identity so future runs match on ORCID directly.
+                    author = authorship.get("author") or {}
+                    updates = []
+                    orcid = AuthorResolver._norm_orcid(author.get("orcid"))
+                    if orcid and not member.orcid:
+                        member.orcid = orcid
+                        updates.append("orcid")
+                    oa_id = (author.get("id") or "").rsplit("/", 1)[-1]
+                    if oa_id and not member.openalex_id:
+                        member.openalex_id = oa_id
+                        updates.append("openalex_id")
+                    if updates:
+                        member.save(update_fields=updates + ["updated_at"])
 
         self.stdout.write(
             self.style.SUCCESS(f"wrote {len(to_write)} papers; linked {linked} author records")

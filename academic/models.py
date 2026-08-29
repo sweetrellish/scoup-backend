@@ -12,6 +12,9 @@ class Faculty(models.Model):
         blank=True,
     )
     faculty_id = models.CharField(max_length=100, unique=True)
+    # Authoritative author identity from OpenAlex/ORCID; resolves name-form ambiguity.
+    orcid = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    openalex_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
     first_name = models.CharField(max_length=100, blank=True, null=True)
     last_name = models.CharField(max_length=100, blank=True, null=True)
     title = models.CharField(max_length=150, blank=True, null=True)
