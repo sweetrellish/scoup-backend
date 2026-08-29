@@ -584,6 +584,44 @@ that was missing yesterday, so room numbers in the directory can now resolve to 
 
 - **Verification:** `bash -n` passes; `rsync` present on host.
 
+### 2026-08-29 10:02 - OpenAlex backfill agent (replaces Scholar scraping)
+
+- **Restore ID:** `DB-20260829-1002`
+- **Artifact:** `~/scoup-backups/db.sqlite3.pre-openalex.*`
+- **File added:** `academic/management/commands/import_openalex.py`
+
+**Why not Google Scholar.** Scholar is not open source, has no public API, forbids automated
+access in its ToS, and defends aggressively against bots (CAPTCHA, IP bans) - a persistent worker
+would be blocked quickly, from university infrastructure. OpenAlex is free, CC0-licensed and has
+a documented API, so it gives the same outcome without the legal or blocking risk.
+
+**Reconnaissance.** Salisbury University = OpenAlex `I9364636`, ROR `029gwvs11`:
+**9,976 works / 337,629 citations**, against 665 papers locally - roughly 15x available.
+Recent coverage: 187 works in 2026, 227 in 2025, 250 in 2024.
+
+**First backfill applied (2026 only):**
+
+| | |
+| --- | --- |
+| works fetched | 181 |
+| new papers written | 181 |
+| already present | **0** (confirming the DB had no 2026 research at all) |
+| skipped, no DOI | 6 |
+| author links created | 72 |
+| total papers | 665 -> **846** |
+
+Field mapping: title, DOI, journal, publication date, citation count, OA PDF URL, concepts ->
+`keywords`, topics -> `themes`, SU authorships -> `faculty_members`. Abstracts are rebuilt from
+OpenAlex's inverted index. Paginated by cursor with a 0.2s delay for the polite pool.
+
+**Known gap:** 168 SU authors on these works are not in the Faculty table, and name forms differ
+("A. Shakur" vs "Asif Shakur"), so only 72 links were made. Author matching needs initial-aware
+logic - ORCID via OpenAlex would resolve this properly.
+
+- **Usage:** `--since YYYY-MM-DD`, `--max N`, `--apply`; dry-run by default.
+- **Status:** In repo + repo DB. **NOT yet deployed** - and since deploy no longer copies the DB,
+  this import must be run against the live database separately.
+
 ---
 
 ## Known open items
