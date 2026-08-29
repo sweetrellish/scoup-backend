@@ -1165,25 +1165,119 @@ not something to apply silently.
 - **Status:** In repo + repo DB. Audit signals only - **no exclusion applied yet, pending a
   scope decision from the user.**
 
+### 2026-08-29 16:05 - Institutions + Facilities endpoints; search filter parameters
+
+- **Restore ID:** `SRC-20260829-1605`
+- **Artifacts:** `~/scoup-backups/views.py.before-searchfilters.*`,
+  `~/scoup-backups/urls.py.before-reference.*`
+- **Files added:** `academic/reference_views.py`,
+  `academic/management/commands/clean_institutions.py`, `data/institutions_clean.json`
+- **Files changed:** `academic/views.py`, `academic/urls.py`, `academic/tests.py`
+
+Backs the sidebar pages tracked as open item #5, and closes items #7 and #8.
+
+**1. Institutions cleaned (item #8).** First finding: `Paper.faculty_affiliations` is `{}` on
+**all 9,237 papers**, so the 149 institutions were never derived from a structured affiliation
+field - they were scraped out of **abstract text**, which is why author names bleed into them.
+That also means the extraction cannot simply be re-run more carefully; the structured source
+does not exist.
+
+`clean_institutions` (dry-run by default) repairs only what is repairable without inventing
+anything, and drops the rest **with a stated reason per entry**:
+
+| Class | Example | Action |
+| --- | --- | --- |
+| name bleed | `Dean J. Kotlowski Salisbury University` | stripped to `Salisbury University` |
+| sentence bleed | `University of Delaware. He` | stripped to `University of Delaware` |
+| leading marker | `Ph.D. Indiana University` | stripped to `Indiana University` |
+| SU sub-unit | `Institutional Review Board of Salisbury University` | rolled up to the parent |
+| **truncation** | `Mason University`, `Federal University` | **dropped - repair requires a guess** |
+| conjunction | `Research Corporation ... and Salisbury University` | **dropped - names two parties** |
+| university press | `University of Chicago Press` | **dropped - publisher, not an affiliation** |
+
+| | |
+| --- | --- |
+| source entries | 149 |
+| clean institutions | **91** |
+| dropped (each with a reason) | 30 |
+| raw variants folded into `Salisbury University` | 23 |
+
+**Rule order was a real bug, caught in an audit pass.** Splitting on the first `". "` before
+stripping name bleed turned `Dean J. Kotlowski Salisbury University` into **"Dean J"**, and
+produced six similar fragments ("James M", "E", "Sri Lanka S"). Personal names carry initials,
+so name bleed must be stripped first. The sentence-bleed rule now also requires the retained
+prefix to be at least two words, so an abbreviation like "St. John's University" cannot be cut
+down to "St".
+
+Every input entry must be classified, so noise added by any future re-extraction is **reported
+and excluded** rather than shipped silently.
+
+**2. `GET /api/institutions/`** serves the cleaned list with `?q=`, `?exclude_host=`, `?limit=`.
+Each entry carries `mergedFrom`, listing the raw extractions folded into it, so the totals are
+auditable rather than taken on trust. The response states that `mentions` measures co-occurrence
+in affiliation text - not partnership status.
+
+**3. `GET /api/facilities/` - the room-to-building join is now live (item #7).** Three sources
+are combined on **exact matches only**: the 105 campus building codes, the 37 buildings on the
+facilities page, and `Faculty.room` prefixes from the directory import.
+
+| | |
+| --- | --- |
+| buildings with a code | 91 |
+| listed on the facilities page | 37 |
+| **occupied by faculty** | **9** |
+| **faculty placed in a building** | **162** |
+
+Henson Science Hall 37, Perdue Hall 30, Conway Hall (TETC) 29, Holloway Hall 23, Devilbiss
+Science Hall 16, Fulton Hall 13. Each entry also reports its departments and resolved schools.
+
+**Near-misses are deliberately not merged.** The facilities page says *Devilbiss Hall* where the
+code list says *Devilbiss Science Hall*, and *Maggs Physical Activities Center* vs *Maggs
+Center*. Deciding those are the same building is a guess, so they remain separate entries and
+each one reports which sources it appeared in - the gap stays visible instead of being papered
+over. Unknown room prefixes (`USM`, `EN`) resolve to no building rather than a nearest match.
+
+**4. `/api/search/` gained filter parameters.** `year_min`, `year_max`, `journal`,
+`min_citations`, `has_abstract` and `sort` (`relevance` | `citations` | `year`), applied on both
+the semantic and lexical paths. Relevance scoring is **untouched** - filters only subset the
+existing ranking, so a filtered search returns the same ordering minus the excluded rows. In the
+semantic path filtering happens before the top-N cut, so a filtered search still fills `limit`.
+Unparseable values are ignored rather than raising; the response echoes the filters actually
+applied.
+
+**Verification:** `manage.py check` clean. Test suite **18 -> 31**, covering institution
+cleaning, the no-guess guarantees, the facilities join, near-miss separation, and every filter
+including the ignore-bad-input case. Curl round trip on a throwaway database copy confirmed
+institutions 91, facilities 162 placed, `journal=oncology` returning only oncology journals,
+`min_citations=50` returning only papers above the floor, and `year_min=abc` returning 200.
+
+- **Status:** In repo. **NOT yet deployed.** No migration required.
+- **Deploy note:** `data/` is gitignored, so `institutions_clean.json` reaches the server through
+  the deploy `rsync`, not git.
+
 ---
 
 ## Known open items
 
 | # | Item | Severity | Status |
 | --- | --- | --- | --- |
-| 3 | 128 faculty pending review; 1,537 external co-authors now excluded from public metrics | Medium | Partly resolved |
+| 3 | 126 faculty pending review, each now with directory match evidence in the admin queue | Medium | Reviewable - awaiting an admin working the queue |
 | 4 | ~40 frontend endpoints still missing (faculty portal, OTP auth, tickets, AI generation) | Medium | Open |
-| 5 | Six sidebar pages still placeholders (Search, Networks, Projects, Labs, Facilities, Institutions) | Medium | Open |
-| 6 | Labs have no data source; SU research pages list none | Medium | Open |
-| 7 | Facility building codes captured (105) but not yet joined to faculty rooms | Low | Open |
-| 8 | Institutions extraction has noise (name bleed, truncated multi-part names) | Low | Open |
-| 9 | `patentsData` / `projectsData` are empty, so those panels render zeros | Low | Open |
+| 5 | Six sidebar pages still placeholders (Search, Networks, Projects, Labs, Facilities, Institutions) | Medium | **Resolved** 2026-08-29 - 4 wired to data, 2 honest empty states |
+| 6 | Labs have no data source; SU research pages list none | Medium | Open - page now states this honestly instead of implying it is unbuilt |
+| 7 | Facility building codes captured (105) but not yet joined to faculty rooms | Low | **Resolved** - 162 faculty placed across 9 buildings via `/api/facilities/` |
+| 8 | Institutions extraction has noise (name bleed, truncated multi-part names) | Low | **Resolved** - 149 -> 91 cleaned; 30 dropped with reasons |
+| 9 | `patentsData` / `projectsData` are empty, so those panels render zeros | Low | Open - Projects page now states this explicitly rather than showing a placeholder |
 | 10 | Frontend bundle is 1.1 MB; needs code-splitting | Low | Open |
 | 11 | `/var/www/.../templates` is `drwxr-x--- root root`, unreadable by the service | Low | Open |
 | 12 | Public faculty profile **backend** endpoint built (`/api/faculty/<id>/public/`); frontend page still needed | Medium | Partly resolved |
 | 13 | Validation worker built; systemd timer not yet installed on the server | Medium | Partly resolved |
 | 14 | 6,062 of 9,237 papers have no linked author (legacy dataset has no institution filter); they cannot surface on a profile and pollute search/category corpus | High | Open |
 | 15 | 3,630 papers have no abstract; sampled OpenAlex re-fetch found 0/170 recoverable (closed-access, not an import bug) | Medium | Open, likely unrecoverable via OpenAlex |
+
+| 16 | `Paper.faculty_affiliations` is `{}` on all 9,237 papers, so affiliations can only be scraped from abstract text | Medium | Open - limits institution and co-author analysis |
+| 17 | `FRONTEND_ORIGINS` / CORS in `scoupdb/settings.py` is hardcoded with no environment override, so a dev server must run on port 3000 | Low | Open |
+| 18 | The repo virtualenv `/home/rellis/scoup-backend/.venv` was missing, so `scoup-backend-staging.service` could not start | Medium | Resolved 2026-08-29 - rebuilt from requirements.txt |
 
 **Resolved:** full OpenAlex backfill, category granularity, DEBUG exposure, categories stub, search relevance, repo/deploy divergence,
 DB-overwriting deploy, `/var/www` git remote, broken `backupAll.sh` refs, deploy outage.
