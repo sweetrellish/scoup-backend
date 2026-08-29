@@ -737,13 +737,64 @@ papers, 87 faculty, 49,480 citations, average 18.11.
 - **Status:** In repo + repo DB. **NOT yet deployed** - live needs the import run separately,
   since deploy no longer copies the database.
 
+### 2026-08-29 11:03 - Dual-source faculty creation + metric scoping
+
+- **Restore ID:** `DB-20260829-1102` (database) / `SRC-20260829-1103` (source)
+- **Artifacts:** `~/scoup-backups/db.sqlite3.pre-newfaculty.*`,
+  `~/scoup-backups/views.py.before-sufilter.*`
+- **Files changed:** `academic/views.py`, `academic/admin_views.py`
+
+**1. 87 SU faculty created from dual-source evidence.** Cross-referencing OpenAlex authorships
+against the SU directory found 119 author names that are listed SU academics but had no Faculty
+row. Evidence is two independent sources agreeing: OpenAlex records the SU institution
+affiliation (`I9364636`) *and* the directory lists them with an academic title.
+
+Created with `directory_verified=True`, `review_status='approved'`, and directory-sourced title,
+department, school, room and phone. `review_note` records the provenance so any correction is
+traceable. **7 candidates were skipped** because more than one directory row shared the surname +
+first initial - ambiguity resolves to no record rather than a guess.
+
+| | |
+| --- | --- |
+| candidates | 94 |
+| created | **87** |
+| skipped (ambiguous) | 7 |
+| faculty total | 1,634 -> 1,721 |
+| directory_verified | 95 -> **182** |
+
+**2. Metrics were counting external co-authors as faculty.** The Faculty table holds
+**1,537 external co-authors** imported from publication data alongside **184 real SU people**.
+Public counters therefore reported 1,721 "faculty", and the department chart showed *Unassigned*
+as the largest group, because those co-authors have no department.
+
+Added `_su_affiliated()` - directory-verified, or has a login, or has a department - and applied
+it to `_visible_faculty_qs()` and `public_search_data`. External co-authors remain in the
+database for paper attribution but no longer appear as faculty or in metrics.
+
+| Metric | Before | After |
+| --- | --- | --- |
+| facultyData | 1,721 | **184** |
+| unassigned department | 1,537 | **1** |
+| top department | *Unassigned* | Mathematics (15) |
+
+Department breakdown is now meaningful: Mathematics 15, Nursing 14, Social Work 12,
+Geography and Geosciences 9, English 9, Management 9.
+
+`admin/stats/` keeps the full row count for administration but now also reports
+`su_affiliated: 184` and `external_coauthors: 1537`, and its department breakdown uses the
+SU-scoped queryset.
+
+- **Verification:** `manage.py check` clean; public dataset 184 faculty / 9,237 papers;
+  admin stats returns the new split.
+- **Status:** In repo + repo DB. **NOT yet deployed.**
+
 ---
 
 ## Known open items
 
 | # | Item | Severity | Status |
 | --- | --- | --- | --- |
-| 3 | 1,413 faculty unverified (mostly external co-authors); 128 pending review | High | Open |
+| 3 | 128 faculty pending review; 1,537 external co-authors now excluded from public metrics | Medium | Partly resolved |
 | 4 | ~40 frontend endpoints still missing (faculty portal, OTP auth, tickets, AI generation) | Medium | Open |
 | 5 | Six sidebar pages still placeholders (Search, Networks, Projects, Labs, Facilities, Institutions) | Medium | Open |
 | 6 | Labs have no data source; SU research pages list none | Medium | Open |

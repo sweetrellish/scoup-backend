@@ -11,7 +11,7 @@ from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
 from .models import Faculty, NetworkInquiry, Paper, Patent, Project
-from .views import _full_name, _normalize_keyword_list
+from .views import _full_name, _normalize_keyword_list, _su_affiliated
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +81,10 @@ def admin_stats(request):
     rejected = faculty_qs.filter(review_status="rejected").count()
     pending = faculty_qs.filter(review_status="pending").count()
 
+    su_qs = faculty_qs.filter(_su_affiliated())
     dept_counts = Counter(
         (f or "").strip()
-        for f in faculty_qs.values_list("department", flat=True)
+        for f in su_qs.values_list("department", flat=True)
         if (f or "").strip()
     )
 
@@ -99,6 +100,9 @@ def admin_stats(request):
                     is_approved=True, profile_visibility=False
                 ).count(),
                 "directory_verified": faculty_qs.filter(directory_verified=True).count(),
+                # Rows also include external co-authors kept for paper attribution.
+                "su_affiliated": su_qs.count(),
+                "external_coauthors": faculty_qs.count() - su_qs.count(),
             },
             "content": {
                 "papers": Paper.objects.count(),
