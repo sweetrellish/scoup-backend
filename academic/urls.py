@@ -17,6 +17,10 @@ from .admin_views import (
     admin_inquiry_detail,
     admin_audit_log,
 )
+from .reference_views import (
+    institutions_list,
+    facilities_list,
+)
 from .network_views import (
     network_discovery,
     network_inquire,
@@ -66,6 +70,8 @@ urlpatterns = [
     path("admin/faculty/<int:pk>/message/", admin_faculty_message, name="admin-faculty-message"),
     path("admin/inquiries/", admin_inquiries, name="admin-inquiries"),
     path("admin/inquiries/<int:pk>/", admin_inquiry_detail, name="admin-inquiry-detail"),
+    path("institutions/", institutions_list, name="institutions-list"),
+    path("facilities/", facilities_list, name="facilities-list"),
     path("network/discovery/", network_discovery, name="network-discovery"),
     path("network/inquire/", network_inquire, name="network-inquire"),
     path("faculty/inquiries/", faculty_inquiries, name="faculty-inquiries"),

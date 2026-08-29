@@ -52,6 +52,9 @@ DROP = {
     "South-Western College": "a textbook publisher imprint, not an institution",
     "University of Texas Dallas": "cannot confirm whether UT Dallas or a bled fragment",
     "University of Texas Southwestern": "cannot confirm whether UT Southwestern or a bled fragment",
+    "University of Maryland Lower Eastern Shore":
+        "no institution by this name; likely a bled variant of University of Maryland "
+        "Eastern Shore, but rewriting it would be a guess",
     # -- Sentence fragments that are not institution names at all. -------------
     "Exercise Motivation And Physical Activity Of College": "abstract text, not an institution",
     # -- Two institutions joined by a conjunction; splitting would invent a pair.
@@ -100,7 +103,12 @@ SUBUNIT_PARENT = {
 
 
 def repair(name):
-    """Return (cleaned_name, rule) or (None, reason) when the entry must be dropped."""
+    """Return (cleaned_name, rule) or (None, reason) when the entry must be dropped.
+
+    Rule order matters. Name bleed is stripped *before* sentence bleed, because
+    personal names carry initials: splitting "Dean J. Kotlowski Salisbury
+    University" at its first period yields "Dean J", not an institution.
+    """
     original = name.strip()
 
     if original in DROP:
@@ -112,18 +120,7 @@ def repair(name):
     working = TRAILING_TOKENS.sub("", original).strip()
     rule = "verbatim" if working == original else "trailing_marker_stripped"
 
-    match = SENTENCE_BLEED.match(working)
-    if match:
-        working = match.group(1).strip()
-        rule = "sentence_bleed_stripped"
-
-    if working in SUBUNIT_PARENT:
-        return SUBUNIT_PARENT[working], "subunit_rollup"
-
-    stripped = LEADING_TOKENS.sub("", working).strip()
-    if stripped != working:
-        working, rule = stripped, "leading_marker_stripped"
-
+    # 1. Name bleed: the entry ends with a fully stated institution.
     match = SU_TAIL.match(working)
     if match:
         prefix = match.group(1)
@@ -131,6 +128,19 @@ def repair(name):
         if re.search(r"\band\b", prefix, re.IGNORECASE):
             return None, "conjunction of two institutions; splitting would be inference"
         return "Salisbury University", "name_bleed_stripped"
+
+    # 2. Leading degree and boilerplate markers.
+    stripped = LEADING_TOKENS.sub("", working).strip()
+    if stripped != working:
+        working, rule = stripped, "leading_marker_stripped"
+
+    # 3. Trailing prose after a sentence break. Requires the retained prefix to be
+    #    at least two words, so an abbreviation like "St. John's University" is
+    #    left intact rather than cut down to "St".
+    match = SENTENCE_BLEED.match(working)
+    if match and len(match.group(1).split()) >= 2:
+        working = match.group(1).strip()
+        rule = "sentence_bleed_stripped"
 
     if working in SUBUNIT_PARENT:
         return SUBUNIT_PARENT[working], "subunit_rollup"

@@ -595,7 +595,83 @@ def _score_paper(paper, tokens, phrase):
     return min(round(confidence, 2), 100.0), sorted(matched_fields)
 
 
-def _lexical_paper_search(query, limit):
+class _SearchFilters:
+    """Optional post-ranking filters for /api/search/.
+
+    Relevance scoring is unchanged - these only remove results that do not meet
+    an explicit constraint, so a filtered search returns a subset of the same
+    ranking rather than a differently ranked list.
+    """
+
+    __slots__ = ("year_min", "year_max", "journal", "min_citations", "has_abstract", "sort")
+
+    def __init__(self, params):
+        self.year_min = _as_int(params.get("year_min"))
+        self.year_max = _as_int(params.get("year_max"))
+        self.journal = (params.get("journal") or "").strip().lower()
+        self.min_citations = _as_int(params.get("min_citations"))
+        self.has_abstract = (params.get("has_abstract") or "").lower() == "true"
+        sort = (params.get("sort") or "relevance").strip().lower()
+        self.sort = sort if sort in {"relevance", "citations", "year"} else "relevance"
+
+    @property
+    def active(self):
+        return any(
+            (
+                self.year_min is not None,
+                self.year_max is not None,
+                self.journal,
+                self.min_citations is not None,
+                self.has_abstract,
+            )
+        )
+
+    def keep(self, year, journal, citations, abstract):
+        if self.year_min is not None and (year or 0) < self.year_min:
+            return False
+        if self.year_max is not None and (year or 0) > self.year_max:
+            return False
+        if self.journal and self.journal not in (journal or "").lower():
+            return False
+        if self.min_citations is not None and (citations or 0) < self.min_citations:
+            return False
+        if self.has_abstract and not (abstract or "").strip():
+            return False
+        return True
+
+    def describe(self):
+        applied = {}
+        if self.year_min is not None:
+            applied["year_min"] = self.year_min
+        if self.year_max is not None:
+            applied["year_max"] = self.year_max
+        if self.journal:
+            applied["journal"] = self.journal
+        if self.min_citations is not None:
+            applied["min_citations"] = self.min_citations
+        if self.has_abstract:
+            applied["has_abstract"] = True
+        applied["sort"] = self.sort
+        return applied
+
+
+def _as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_sort(results, sort):
+    """Re-order finished result dicts. Relevance order is left untouched."""
+    if sort == "citations":
+        return sorted(results, key=lambda r: (r.get("citations") or 0), reverse=True)
+    if sort == "year":
+        return sorted(results, key=lambda r: (r.get("year") or 0), reverse=True)
+    return results
+
+
+def _lexical_paper_search(query, limit, filters=None):
     """Weighted keyword ranking used when embeddings are unavailable."""
     tokens = _tokenize_query(query)
     if not tokens:
@@ -623,6 +699,8 @@ def _lexical_paper_search(query, limit):
         year = _year_from_dates(
             paper.date_published_online, paper.date_published_print, paper.date_published
         )
+        if filters and not filters.keep(year, paper.journal, paper.tc_count, paper.abstract):
+            continue
         scored.append((confidence, paper.tc_count or 0, year or 0, paper, matched_on))
 
     # Citations and recency break ties only, so they cannot outrank relevance.
@@ -651,7 +729,7 @@ def _lexical_paper_search(query, limit):
                 "confidence": confidence,
             }
         )
-    return results
+    return _apply_sort(results, filters.sort) if filters else results
 
 
 @api_view(["GET"])
@@ -668,17 +746,19 @@ def semantic_paper_search(request):
     limit = max(1, min(limit, 100))
 
     model = (request.query_params.get("model") or "text-embedding-3-small").strip()
+    filters = _SearchFilters(request.query_params)
 
     try:
         query_embedding = create_query_embedding(query, model=model)
     except Exception as exc:
-        results = _lexical_paper_search(query, limit)
+        results = _lexical_paper_search(query, limit, filters)
         return Response(
             {
                 "query": query,
                 "model": model,
                 "count": len(results),
                 "results": results,
+                "filters": filters.describe(),
                 "detail": f"Embeddings unavailable; used ranked keyword search. ({exc})",
             },
             status=status.HTTP_200_OK,
@@ -704,6 +784,16 @@ def semantic_paper_search(request):
         embedding = paper.paper_embedding or []
         score = cosine_similarity(query_embedding, embedding)
         if score <= 0:
+            continue
+        # Filtered before the top-N cut, so a filtered search still fills `limit`.
+        if not filters.keep(
+            _year_from_dates(
+                paper.date_published_online, paper.date_published_print, paper.date_published
+            ),
+            paper.journal,
+            paper.tc_count,
+            paper.abstract,
+        ):
             continue
         score_100 = round(score * 100.0, 2)
         scored.append((score_100, paper))
@@ -753,10 +843,13 @@ def semantic_paper_search(request):
             }
         )
 
+    results = _apply_sort(results, filters.sort)
+
     return Response(
         {
             "query": query,
             "model": model,
+            "filters": filters.describe(),
             "count": len(results),
             "results": results,
         }
