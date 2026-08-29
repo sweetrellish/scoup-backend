@@ -16,6 +16,8 @@ class Faculty(models.Model):
     last_name = models.CharField(max_length=100, blank=True, null=True)
     title = models.CharField(max_length=150, blank=True, null=True)
     department = models.CharField(max_length=150, blank=True, null=True)
+    # Parent college/school, resolved from department via data/su_schools.json.
+    school = models.CharField(max_length=150, blank=True, default="")
     email = models.EmailField(unique=True, blank=True, null=True)
     office = models.CharField(max_length=150, blank=True, null=True)
     room = models.CharField(max_length=100, blank=True, null=True)

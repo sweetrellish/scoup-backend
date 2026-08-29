@@ -451,6 +451,32 @@ for verification; initial matches belong in review, not auto-applied.
 
 - **Status:** In repo + repo DB. **NOT yet deployed.**
 
+### 2026-08-29 08:59 - import_su_directory now exact-match-only by default
+
+- **Restore ID:** `SRC-20260829-0859`
+- **Artifact:** `~/scoup-backups/import_su_directory.py.before-strict.*`
+- **File changed:** `academic/management/commands/import_su_directory.py`
+
+Makes the safe behaviour the default, so the *Shing Yip Lee -> Physics* class of false positive
+cannot recur:
+
+- Only **exact first-name** matches are written and earn `directory_verified=True`.
+- **First-initial-only** matches are no longer written. They are counted, reported, and their
+  Faculty rows are set to `review_status='pending'` so they appear in the admin queue at
+  `/api/admin/faculty/?status=pending`.
+- `--include-initial` re-enables the old behaviour explicitly, with the risk documented in
+  `--help`.
+
+Dry-run comparison:
+
+| Mode | exact | initial written | held for review |
+| --- | --- | --- | --- |
+| default | 95 | 0 | 126 |
+| `--include-initial` | 95 | 126 | 0 |
+
+- **Verification:** both modes dry-run clean; `py_compile` passes.
+- **Status:** In repo. Behaviour-only change; no migration required.
+
 ---
 
 ## Known open items
