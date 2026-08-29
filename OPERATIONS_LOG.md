@@ -1072,7 +1072,7 @@ closes the join that open item #7 was waiting on.
 **Approving now completes the match.** These records are pending precisely because the directory
 fields were withheld, so approve accepts `apply_directory_match: true`, which writes title,
 department, room, phone and the resolved school, sets `directory_verified`, and records
-provenance in `review_note` ("Directory match confirmed by <admin>: ..."). When the evidence has
+provenance in `review_note` ("Directory match confirmed by \<admin\>: ..."). When the evidence has
 no single candidate the endpoint returns **400 and leaves the record pending** - a reviewer
 cannot accidentally approve a guess. Plain approve is unchanged.
 
@@ -1263,6 +1263,7 @@ institutions 91, facilities 162 placed, `journal=oncology` returning only oncolo
 **Deployed to live**, since Claude Code finished both assigned tasks (review queue evidence UI,
 six sidebar pages) and its process had exited cleanly - the user hadn't seen changes because
 nothing had been shipped yet, not because anything was broken:
+
 - Backend: rsync + `manage.py check` (no new migrations) + gunicorn restart. Verified
   `/api/faculty/<id>/public/`, `/api/institutions/`, `/api/facilities/` all 200 live.
 - Frontend: `npm run build` + rsync to `/var/www/.../dist`. Verified `/` and `/experts` 200 live.
@@ -1305,7 +1306,7 @@ correctly refused to accept "your browser" as an explanation and kept pushing; t
 **Root cause, found by direct evidence, not guessing:** `academic/.env` (a *backend* Django env
 file) contained an unrelated *frontend* Vite variable:
 
-```
+```env
 VITE_API_BASE_URL=https://scoup-backend-ryan.onrender.com/api
 ```
 
@@ -1332,6 +1333,7 @@ elsewhere by the bundle's baked-in constant - which is exactly why the symptom w
 regardless of browser, cache, or network.
 
 **Fix:**
+
 1. `unset VITE_API_BASE_URL` in the working shell.
 2. Rebuilt with an explicit clean environment: `env -u VITE_API_BASE_URL VITE_API_BASE_URL=/api npm run build`.
 3. Verified zero `onrender` occurrences in the new bundle (`index-DWCJnho1.js`) before deploying.
