@@ -1292,6 +1292,59 @@ it left off, since already-linked papers are excluded by the queryset automatica
 `confirmed_foreign` bucket is still a separate step, not yet built, pending real verification
 data (fewer than 5 papers have been checked with the new code so far).
 
+### 2026-08-29 17:49 - INCIDENT: production frontend calling a dead Render.com backend (RESOLVED)
+
+- **Restore ID:** `INCIDENT-20260829-1749`
+- **Root cause file:** `.env` (both repo and live copies) - stray `VITE_API_BASE_URL` line
+- **Fix:** removed the stray line from both `.env` files; rebuilt and redeployed the frontend
+
+**Impact:** every real visitor - any browser, any network, phone on cellular data, with or
+without cache - got 0 papers, 1,632 "Unassigned" faculty, and a broken admin login. The user
+correctly refused to accept "your browser" as an explanation and kept pushing; they were right.
+
+**Root cause, found by direct evidence, not guessing:** `academic/.env` (a *backend* Django env
+file) contained an unrelated *frontend* Vite variable:
+
+```
+VITE_API_BASE_URL=https://scoup-backend-ryan.onrender.com/api
+```
+
+This has no reason to be in a Django `.env`, and it points at an old, abandoned Render.com
+deployment (see `render.yaml` in this repo) with its own separate, stale database.
+
+Earlier the same session, this assistant ran `set -a; source .env; set +a` in
+`/home/rellis/scoup-backend` to load `ANTHROPIC_API_KEY` for launching Claude Code. `set -a`
+exports **every** variable in the sourced file, not just the one needed - including the stray
+`VITE_API_BASE_URL`. That export persisted in the shell for the rest of the session. When the
+frontend was later built **in the same long-lived terminal**, Vite's environment-variable
+precedence let that exported shell variable silently override the correct value in
+`.env.production` (`VITE_API_BASE_URL=/api`), baking the wrong absolute URL into the shipped
+bundle. `grep -rn onrender src/` found nothing, because the string was never in source - only in
+the environment at build time.
+
+**Why this was so hard to find:** every server-side check this assistant ran (curl against
+`https://scoup-salisbury.net/api/...`, direct Django ORM queries, migration state, gunicorn
+process list, nginx config, DNS resolution - all genuinely clean) tested the *real* backend
+directly and never went through the actual browser bundle, which was calling a completely
+different server. The user's own tests (private window, different browser, phone off wifi) all
+correctly reached the live site's HTML shell, then had their API calls silently redirected
+elsewhere by the bundle's baked-in constant - which is exactly why the symptom was identical
+regardless of browser, cache, or network.
+
+**Fix:**
+1. `unset VITE_API_BASE_URL` in the working shell.
+2. Rebuilt with an explicit clean environment: `env -u VITE_API_BASE_URL VITE_API_BASE_URL=/api npm run build`.
+3. Verified zero `onrender` occurrences in the new bundle (`index-DWCJnho1.js`) before deploying.
+4. Removed the stray line from **both** `.env` files (repo and live) so no future build in either
+   directory can be silently contaminated again, regardless of shell state.
+5. Restarted gunicorn after the live `.env` edit (env vars are read at process start).
+
+- **Verification:** new bundle deployed and confirmed onrender-free; `/`, `/api/categories/` both
+  200 post-deploy. Awaiting the user's confirmation from their own browser/phone.
+- **Lesson:** never `set -a; source .env` a file whose contents haven't been audited - export
+  only the specific variable needed (`export ANTHROPIC_API_KEY=$(grep ... .env)`), and never build
+  a frontend in a terminal that has sourced a backend `.env`, or vice versa.
+
 ---
 
 ## Known open items
