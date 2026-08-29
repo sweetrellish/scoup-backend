@@ -1120,6 +1120,51 @@ cd /var/www/scoup2025.privatedns.org/scoup-backend
 - **Verification:** `manage.py check` clean; 18/18 tests pass; curl round trip as tabled above.
 - **Status:** In repo. **NOT yet deployed.** No migration required - no schema change.
 
+### 2026-08-29 15:39 - Salisbury-place-name contamination confirmed; worker now audits for it
+
+- **Restore ID:** `SRC-20260829-1539`
+- **File changed:** `academic/management/commands/run_validation.py`
+
+**Correcting the 13:56 entry.** The user's original diagnosis was right, and framing the
+word-boundary regex bug as the whole story was wrong. They found a second, independent example:
+*"A multi-agent architecture for situation awareness"* (T. Nguyen, Defence Science and Technology
+Organisation, **Salisbury, Australia**), published 2002, zero linked SU faculty. This is not
+explainable by the search regex fix - it is the underlying data contamination that fix only
+partly masked.
+
+**Confirmed with hard evidence, not a guess:** the oldest records in the corpus are 18th-century
+English letters that predate Salisbury University's founding (1925) by two centuries -
+*"An account of a polypus cough'd up from the windpipe... Physician at Salisbury"* (1727) and a
+smallpox inoculation report from Salisbury, England (1752). Both are unlinked to any faculty.
+**Zero** of the 196 pre-1925 papers are linked to a faculty record, so the author-linking logic
+itself is not at fault - the contamination is upstream, in `import_full_dataset`, which (per the
+08-29 10:02 entry) has no institution filter and was almost certainly seeded by text-matching the
+word "Salisbury" globally.
+
+**Two new non-guessing audit signals**, since we cannot recover affiliation text that was never
+stored:
+
+| Signal | Count | Basis |
+| --- | --- | --- |
+| `papers_before_su_founding_unlinked` | 196 | Unlinked + dated before 1925 (SU did not exist) |
+| `papers_outside_26yr_window_unlinked` | 3,868 | Unlinked + outside the user's requested 26-year review window |
+
+Both are **audit-only** - the worker reports them, it does not delete or hide anything yet, per
+this project's rule against acting on inference without confirmation. `papers_without_authors`
+(6,062 total) remains the umbrella signal; these two add date-based context to it.
+
+**Still open, and now explicit:** modern-dated foreign-"Salisbury" papers with a linked-looking
+name (like the 2002 Australian one) are **not** caught by the date filter, because the mechanism
+is affiliation text we never stored - only "no linked author" catches those, and that alone is
+too broad to safely auto-exclude (would also hide legitimate papers whose SU author simply failed
+to link). A real fix requires a scoped decision: exclude/hide papers with zero linked faculty from
+public search and public counts. That is a judgment call on visible corpus size (9,237 -> ~3,171),
+not something to apply silently.
+
+- **Verification:** `manage.py check` clean; audit run confirms both counts.
+- **Status:** In repo + repo DB. Audit signals only - **no exclusion applied yet, pending a
+  scope decision from the user.**
+
 ---
 
 ## Known open items
