@@ -1274,7 +1274,6 @@ institutions 91, facilities 162 placed, `journal=oncology` returning only oncolo
 | 13 | Validation worker built; systemd timer not yet installed on the server | Medium | Partly resolved |
 | 14 | 6,062 of 9,237 papers have no linked author (legacy dataset has no institution filter); they cannot surface on a profile and pollute search/category corpus | High | Open |
 | 15 | 3,630 papers have no abstract; sampled OpenAlex re-fetch found 0/170 recoverable (closed-access, not an import bug) | Medium | Open, likely unrecoverable via OpenAlex |
-
 | 16 | `Paper.faculty_affiliations` is `{}` on all 9,237 papers, so affiliations can only be scraped from abstract text | Medium | Open - limits institution and co-author analysis |
 | 17 | `FRONTEND_ORIGINS` / CORS in `scoupdb/settings.py` is hardcoded with no environment override, so a dev server must run on port 3000 | Low | Open |
 | 18 | The repo virtualenv `/home/rellis/scoup-backend/.venv` was missing, so `scoup-backend-staging.service` could not start | Medium | Resolved 2026-08-29 - rebuilt from requirements.txt |
