@@ -622,14 +622,91 @@ logic - ORCID via OpenAlex would resolve this properly.
 - **Status:** In repo + repo DB. **NOT yet deployed** - and since deploy no longer copies the DB,
   this import must be run against the live database separately.
 
+### 2026-08-29 10:07 - ORCID-based author resolution
+
+- **Restore ID:** `SRC-20260829-1007`
+- **Artifacts:** `~/scoup-backups/models.py.before-orcid.*`,
+  `~/scoup-backups/import_openalex.py.before-orcid.*`
+- **Files changed:** `academic/models.py`, `academic/management/commands/import_openalex.py`
+- **Migration:** `0011_faculty_openalex_id_faculty_orcid`
+
+Added `Faculty.orcid` and `Faculty.openalex_id` plus an `AuthorResolver` that matches in
+priority order: **ORCID -> OpenAlex author id -> exact name -> last name + first initial**.
+Ambiguous initials (two faculty sharing surname and initial) resolve to no match rather than
+guessing, which is the mistake the SU directory import made earlier.
+
+Identities are persisted on write, so each run gets more accurate:
+
+| Run | orcid | openalex | name | initial | total linked |
+| --- | --- | --- | --- | --- | --- |
+| before | - | - | 72 | - | 72 |
+| after first apply | 0 | 0 | 72 | 19 | 91 |
+| subsequent run | **44** | **38** | 8 | 1 | 91 |
+
+21 faculty now carry an ORCID and 51 an OpenAlex id. Matching is no longer dependent on
+name formatting.
+
+**Site metrics verified.** `/api/public/search-data/` returns facultyData 1634, papersData
+**846** (181 of them 2026). `Home.tsx` derives its counters from these array lengths, so the
+front-page figures update automatically on deploy. `patentsData` and `projectsData` are both
+**0** - those panels will render zeros until patent/project sources are ingested.
+
+- **Status:** In repo + repo DB. Live needs `migrate` (0010, 0011) plus the import run.
+
+### 2026-08-29 10:18 - INCIDENT: production outage during deploy (resolved)
+
+- **Restore ID:** `INCIDENT-20260829-1018`
+- **Artifacts:** `~/scoup-backups/scoupsite-pushv4.sh.before-rmfix.*`,
+  `~/scoup-backups/scoupsite-pushv4.sh.before-chownfix.*`
+- **Impact:** `/api/*` returned 502 for roughly 15 minutes. The static home page kept serving.
+  **No data was lost.**
+
+**Cause 1 - deletion.** `deploy()` had always run `sudo rm -rf "$DOMAIN_DIR/scoup-backend"`
+immediately before copying. That was harmless with `cp -r`, which recreated everything from
+source. The `rsync` change added earlier the same day *excludes* `db.sqlite3` and `.venv/`, so
+after the `rm -rf` wiped them rsync correctly refused to re-create excluded paths - leaving no
+virtualenv and no database. Changing a copy command's semantics without auditing the surrounding
+cleanup was the mistake.
+
+**Cause 2 - ownership.** Rebuilding the venv with `sudo -u www-data` created it `0770
+www-data:www-data`, but `scoup-gunicorn.service` runs as **`User=rellis`**. systemd reported
+`status=203/EXEC ... Permission denied`. The database had the same problem (`0640 www-data`).
+The previous venv worked only because its modes were permissive enough for cross-user execution.
+
+**Resolution.**
+
+1. Removed the `rm -rf` from `deploy()`; `rsync --delete` already removes stale files while
+   preserving excluded ones.
+2. Rebuilt the venv and restored `db.sqlite3` from the repo copy.
+3. `chown -R rellis:rellis` on `.venv` and `db.sqlite3` to match the service user.
+4. Changed both deploy `chown` calls from `www-data:www-data` to
+   `"${SUDO_USER:-rellis}":www-data` plus `chmod -R u+rwX,g+rX,o+rX`, so the service user can
+   execute and nginx can still read. Without this the next deploy would have re-broken it.
+
+**Verified after recovery:** `/`, `/api/categories/`, `/api/query-expansions/`,
+`/api/network/discovery/`, `/api/search/` all **200**; 1,634 faculty and 846 papers live,
+including the 181 from 2026.
+
+**Lesson:** when swapping a recursive copy for an excluding sync, audit what runs before it -
+exclusions only protect files that still exist.
+
 ---
 
 ## Known open items
 
 | # | Item | Severity | Status |
 | --- | --- | --- | --- |
-| 1 | `DEBUG` resolves to `True` in production; tracebacks are publicly exposed | High (security) | Open |
-| 2 | `/api/categories/` still returns hardcoded stub `["CS", "Bio"]` | High | Open |
-| 3 | Search relevance is unweighted substring matching; returns irrelevant results | High | Open |
-| 4 | `/var/www` backend and `/home/rellis/scoup-backend` have diverged | Medium | Open |
-| 5 | `/var/www/.../scoup-backend/templates` is `drwxr-x--- root root`, unreadable by the service | Low | Open |
+| 1 | Full OpenAlex backfill (9,976 works; only 2026 loaded) | High | Open |
+| 2 | Categories exploded to 1,949 via OpenAlex concepts - too granular for the UI | High | Open |
+| 3 | 1,413 faculty unverified (mostly external co-authors); 128 pending review | High | Open |
+| 4 | ~40 frontend endpoints still missing (faculty portal, OTP auth, tickets, AI generation) | Medium | Open |
+| 5 | Six sidebar pages still placeholders (Search, Networks, Projects, Labs, Facilities, Institutions) | Medium | Open |
+| 6 | Labs have no data source; SU research pages list none | Medium | Open |
+| 7 | Facility building codes captured (105) but not yet joined to faculty rooms | Low | Open |
+| 8 | Institutions extraction has noise (name bleed, truncated multi-part names) | Low | Open |
+| 9 | `patentsData` / `projectsData` are empty, so those panels render zeros | Low | Open |
+| 10 | Frontend bundle is 1.1 MB; needs code-splitting | Low | Open |
+| 11 | `/var/www/.../templates` is `drwxr-x--- root root`, unreadable by the service | Low | Open |
+
+**Resolved:** DEBUG exposure, categories stub, search relevance, repo/deploy divergence,
+DB-overwriting deploy, `/var/www` git remote, broken `backupAll.sh` refs, deploy outage.

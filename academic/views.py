@@ -764,6 +764,17 @@ def semantic_paper_search(request):
 
 
 
+# OpenAlex concepts are extremely fine-grained - most groups have a single paper
+# (e.g. "APACHE II"). Browsing needs a floor, scaled to corpus size so it does not
+# drift as more works are ingested. Callers can override with ?min_count=.
+CATEGORY_CORPUS_DIVISOR = 300
+CATEGORY_MIN_FLOOR = 5
+
+
+def _default_category_min(total_papers):
+    return max(CATEGORY_MIN_FLOOR, total_papers // CATEGORY_CORPUS_DIVISOR)
+
+
 def _split_top_level(name):
     """Derive a top-level grouping from the flat taxonomy string.
 
@@ -862,6 +873,14 @@ def categories_list(request):
                     "mid_level_categories": mids,
                 }
             )
+
+        fallback_min = _default_category_min(Paper.objects.count())
+        try:
+            min_articles = max(0, int(request.query_params.get("min_count", fallback_min)))
+        except (TypeError, ValueError):
+            min_articles = fallback_min
+        if min_articles:
+            payload = [c for c in payload if c["article_count"] >= min_articles]
 
         payload.sort(key=lambda item: (-item["article_count"], item["name"]))
 
