@@ -103,3 +103,6 @@ refs/
 
 # Never track a deployed copy
 /var/
+
+# Worker run state (machine-local)
+data/validation_state.json
