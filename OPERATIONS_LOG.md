@@ -824,6 +824,94 @@ it should run after every OpenAlex import.
 - **Verification:** `manage.py check` clean; zero verified faculty mismatched after the run.
 - **Status:** In repo + repo DB. **NOT yet deployed.**
 
+### 2026-08-29 12:49 - Scheduled validation worker
+
+- **Restore ID:** `SRC-20260829-1249`
+- **Artifact:** `~/scoup-backups/db.sqlite3.pre-worker.*`
+- **Files added:** `academic/management/commands/run_validation.py`,
+  `deploy/scoup-validation.service`, `deploy/scoup-validation.timer`
+
+Replaces manual, credit-consuming inspection with a nightly job. Runs the ingest and repair
+commands **in dependency order** - new papers must land before metrics are recomputed from them,
+which is exactly the ordering whose absence caused the Enyue Lu drift.
+
+| Job | Command | Purpose |
+| --- | --- | --- |
+| openalex | `import_openalex` | pull new works since the last run |
+| metrics | `recalc_faculty_metrics` | repair denormalized counts |
+| schools | `import_su_schools` | resolve schools for new departments |
+
+**Repair vs. report is a deliberate split.** Jobs fix only what is safely derivable from data
+already present. The audit pass *reports* and never writes, because guessing is what produced the
+bad data the worker exists to catch (see the *Shing Yip Lee -> Physics* false positive).
+
+Audit baseline:
+
+| Signal | Value |
+| --- | --- |
+| faculty SU-affiliated / external | 184 / 1,537 |
+| metric drift | 0 |
+| pending review | 128 |
+| affiliated missing school | 17 |
+| papers total | 9,237 |
+| papers without linked authors | 6,062 |
+| papers without abstract | 3,630 |
+| unreviewed inquiries | 0 |
+
+**Safety:** dry-run by default (`--apply` writes); `flock` prevents overlapping runs; a failing
+job is captured and does not abort the rest; incremental runs overlap the window by one day
+because OpenAlex backdates indexing. `--full`, `--audit-only`, `--jobs`, `--json` supported.
+The systemd unit runs as **`User=rellis`** (matching Gunicorn - running as `www-data` caused the
+10:18 outage) with `ProtectSystem=full` and a single `ReadWritePaths`.
+
+**Two bugs found and fixed during verification, both silent:**
+
+1. The audit queried `Paper.faculty_members`, which **resolved without error** and returned
+   `papers_without_authors: 0`. The real field is `authors`; the true figure is **6,062**. A
+   wrong-but-plausible zero in a monitoring tool is worse than a crash.
+2. `settings.BASE_DIR` points at the *settings package* (`scoup-backend/scoupdb`), not the repo
+   root, so run state was written outside the project. Anchored to `Path(__file__).parents[3]`
+   after printing each depth rather than assuming.
+
+**Install:**
+
+```bash
+sudo cp deploy/scoup-validation.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now scoup-validation.timer
+systemctl list-timers scoup-validation.timer
+journalctl -u scoup-validation.service -n 50
+```
+
+- **Verification:** `manage.py check` clean; audit-only, per-job and full `--apply` runs all
+  succeed (78s end to end); state file persists and drives the next incremental window.
+- **Status:** In repo. Timer **not yet installed** on the server.
+
+### 2026-08-29 12:49 - Admin dashboard credentials located
+
+- **Restore ID:** `NONE` (credential change only)
+- **Finding:** the admin dashboard was **already built** - it was never missing, only unreachable.
+
+`scoup-frontend-2.0/src/components/` contains `AdminLogin.tsx`, `AdminDashboard.tsx` and twelve
+pages under `admin/` totalling ~6,000 lines: Overview, FacultyManagement, PendingApprovals,
+Inquiries, DepartmentManagement, PlatformAnalytics, StrategicInsights, AdminAnalytics, Messages,
+Profile, SystemSettings, ContactPageEditor. These pair with the eleven `/api/admin/*` endpoints
+built on 2026-08-28.
+
+**Credential state.** Both databases hold the same 5 users; 3 are superusers (`rellis`, `ryan`,
+`opeade`). None matched `ScoupAdmin123!` from `ensure_superuser.py`, so the seeded password had
+been changed and is unrecoverable by design (PBKDF2). Reset `rellis` interactively via
+`manage.py changepassword` on the live DB - the password was typed directly into the terminal and
+never passed through the assistant.
+
+**Login path clarified.** `AdminLogin.tsx` posts to **`/api/token/`** (SimpleJWT,
+`EmailOrUsernameTokenObtainPairView`, accepting email *or* username), not `/api/auth/login/`.
+Confirmed live: `/api/auth/login/` -> 404, `/api/admin/me/` -> 401 anonymous (correct).
+
+Sign in at `https://scoup-salisbury.net/admin-login` as `rellis`; `App.tsx` calls `adminMe()`
+and routes to `/admin-dashboard` on success.
+
+- **Status:** Live password updated. Dashboard awaiting your sign-in to validate.
+
 ---
 
 ## Known open items
@@ -840,7 +928,9 @@ it should run after every OpenAlex import.
 | 10 | Frontend bundle is 1.1 MB; needs code-splitting | Low | Open |
 | 11 | `/var/www/.../templates` is `drwxr-x--- root root`, unreadable by the service | Low | Open |
 | 12 | No **public** faculty profile page; only the authenticated self-service dashboard exists | Medium | Open |
-| 13 | No scheduled validation worker; metric drift is currently fixed manually | Medium | Open |
+| 13 | Validation worker built; systemd timer not yet installed on the server | Medium | Partly resolved |
+| 14 | 6,062 of 9,237 papers have no linked author, so they cannot surface on any profile | High | Open |
+| 15 | 3,630 papers have no abstract, weakening search recall | Medium | Open |
 
 **Resolved:** full OpenAlex backfill, category granularity, DEBUG exposure, categories stub, search relevance, repo/deploy divergence,
 DB-overwriting deploy, `/var/www` git remote, broken `backupAll.sh` refs, deploy outage.
