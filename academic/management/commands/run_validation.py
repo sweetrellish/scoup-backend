@@ -161,6 +161,24 @@ class Command(BaseCommand):
             "papers_without_abstract": Paper.objects.filter(
                 Q(abstract__isnull=True) | Q(abstract="")
             ).count(),
+            # SU was founded in 1925; an unlinked paper dated before that cannot be
+            # genuine SU research. Confirmed real (not a guess): an 1727 English
+            # letter and a 1752 inoculation report both matched on the place name
+            # "Salisbury", not the university.
+            "papers_before_su_founding_unlinked": Paper.objects.filter(
+                date_published__year__lt=1925
+            )
+            .annotate(n=Count("authors"))
+            .filter(n=0)
+            .count(),
+            # Unlinked + outside a rolling 26-year window: a softer version of the
+            # same signal, for the user's requested review window.
+            "papers_outside_26yr_window_unlinked": Paper.objects.filter(
+                date_published__year__lt=timezone.now().year - 26
+            )
+            .annotate(n=Count("authors"))
+            .filter(n=0)
+            .count(),
             "citations_total": Paper.objects.aggregate(n=Sum("tc_count"))["n"] or 0,
             "inquiries_unreviewed": NetworkInquiry.objects.filter(status="new").count(),
         }
@@ -177,7 +195,13 @@ class Command(BaseCommand):
                 self.stdout.write(f"    | {line}")
 
         self.stdout.write(self.style.MIGRATE_HEADING("audit"))
-        flagged = {"metric_drift", "pending_review", "inquiries_unreviewed"}
+        flagged = {
+            "metric_drift",
+            "pending_review",
+            "inquiries_unreviewed",
+            "papers_before_su_founding_unlinked",
+            "papers_outside_26yr_window_unlinked",
+        }
         for key, value in report["audits"].items():
             label = f"  {key:<32} {value}"
             self.stdout.write(self.style.WARNING(label) if key in flagged and value else label)
