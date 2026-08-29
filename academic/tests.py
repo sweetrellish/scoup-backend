@@ -6,6 +6,7 @@ Runs against Django's throwaway test database; db.sqlite3 is never touched.
 """
 
 import json
+from datetime import date
 
 from django.contrib.auth.models import User
 from django.test import TestCase
@@ -18,7 +19,7 @@ from academic.directory_match import (
     normalize,
     resolve_school,
 )
-from academic.models import Faculty
+from academic.models import Faculty, Paper
 
 
 class DirectoryMatchTests(TestCase):
@@ -205,3 +206,118 @@ class AdminReviewQueueTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)
+
+
+class ReferenceEndpointTests(TestCase):
+    """Institutions and Facilities: file-backed reference data, no models."""
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_institutions_are_public_and_cleaned(self):
+        response = self.client.get("/api/institutions/")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertGreater(body["total"], 50)
+
+        names = [r["name"] for r in body["results"]]
+        # Name bleed and truncation must not survive into the shipped list.
+        self.assertNotIn("Dean J. Kotlowski Salisbury University", names)
+        self.assertNotIn("University of Delaware. He", names)
+        self.assertNotIn("Mason University", names)
+        self.assertIn("Salisbury University", names)
+
+    def test_host_institution_is_flagged_and_shows_what_was_merged(self):
+        body = self.client.get("/api/institutions/").json()
+        host = next(r for r in body["results"] if r["name"] == "Salisbury University")
+        self.assertTrue(host["isHost"])
+        self.assertIn("Dean J. Kotlowski Salisbury University", host["mergedFrom"])
+
+    def test_institutions_search_and_host_exclusion(self):
+        body = self.client.get("/api/institutions/?q=vanderbilt").json()
+        self.assertEqual([r["name"] for r in body["results"]], ["Vanderbilt University"])
+
+        body = self.client.get("/api/institutions/?exclude_host=true").json()
+        self.assertNotIn("Salisbury University", [r["name"] for r in body["results"]])
+
+    def test_facilities_join_rooms_to_buildings(self):
+        response = self.client.get("/api/facilities/")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertGreater(body["summary"]["buildingCodes"], 100)
+
+        by_name = {r["name"]: r for r in body["results"]}
+        henson = by_name["Henson Science Hall"]
+        self.assertIn("HS", henson["codes"])
+
+    def test_facilities_do_not_merge_near_miss_names(self):
+        """'Devilbiss Science Hall' and 'Devilbiss Hall' stay distinct by design."""
+        body = self.client.get("/api/facilities/").json()
+        by_name = {r["name"]: r for r in body["results"]}
+        self.assertIn("Devilbiss Science Hall", by_name)
+        self.assertFalse(by_name["Devilbiss Science Hall"]["onFacilitiesPage"])
+
+    def test_facilities_occupied_filter(self):
+        body = self.client.get("/api/facilities/?occupied=true").json()
+        self.assertTrue(all(r["facultyCount"] > 0 for r in body["results"]))
+
+
+class SearchFilterTests(TestCase):
+    """Optional filters on /api/search/ narrow results without re-ranking them."""
+
+    def setUp(self):
+        self.client = APIClient()
+        rows = [
+            ("Machine learning for coastal mapping", 2024, 5, "Journal of Coastal Research"),
+            ("Machine learning in clinical oncology", 2005, 120, "Annals of Oncology"),
+            ("Machine learning and student outcomes", 2021, 0, "Education Review"),
+        ]
+        for i, (title, year, citations, journal) in enumerate(rows):
+            Paper.objects.create(
+                title=title,
+                doi=f"10.0000/test-{i}",
+                journal=journal,
+                tc_count=citations,
+                date_published=date(year, 6, 1),
+                abstract="Machine learning applied to a test corpus.",
+            )
+
+    def _search(self, query):
+        response = self.client.get(f"/api/search/?q=machine+learning&{query}")
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_unfiltered_search_reports_no_active_filters(self):
+        body = self._search("limit=50")
+        self.assertEqual(body["filters"], {"sort": "relevance"})
+        self.assertGreaterEqual(body["count"], 3)
+
+    def test_year_range_filter(self):
+        years = [r["year"] for r in self._search("limit=50&year_min=2020")["results"]]
+        self.assertTrue(years)
+        self.assertTrue(all(y >= 2020 for y in years), years)
+
+        years = [r["year"] for r in self._search("limit=50&year_max=2010")["results"]]
+        self.assertTrue(all(y <= 2010 for y in years), years)
+
+    def test_min_citations_filter(self):
+        results = self._search("limit=50&min_citations=100")["results"]
+        self.assertTrue(results)
+        self.assertTrue(all(r["citations"] >= 100 for r in results))
+
+    def test_journal_filter_is_a_substring_match(self):
+        results = self._search("limit=50&journal=oncology")["results"]
+        self.assertTrue(results)
+        self.assertTrue(all("oncology" in r["journal"].lower() for r in results))
+
+    def test_sort_by_citations_reorders_results(self):
+        citations = [r["citations"] for r in self._search("limit=50&sort=citations")["results"]]
+        self.assertEqual(citations, sorted(citations, reverse=True))
+
+    def test_sort_by_year_reorders_results(self):
+        years = [r["year"] for r in self._search("limit=50&sort=year")["results"]]
+        self.assertEqual(years, sorted(years, reverse=True))
+
+    def test_unparseable_filters_are_ignored_rather_than_failing(self):
+        body = self._search("limit=50&year_min=abc&min_citations=&sort=bogus")
+        self.assertEqual(body["filters"], {"sort": "relevance"})
