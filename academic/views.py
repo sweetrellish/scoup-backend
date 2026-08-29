@@ -310,8 +310,7 @@ def _get_request_faculty(user, create_if_missing=False):
 def public_search_data(request):
     try:
         faculty_qs = (
-            Faculty.objects.filter(profile_visibility=True)
-            .filter(Q(is_approved=True) | Q(user__isnull=False))
+            _visible_faculty_qs()
             .prefetch_related("projects", "patents")
             .select_related("user")
             .order_by("last_name", "first_name")
@@ -784,9 +783,22 @@ def _split_top_level(name):
     return name.split(",")[0].strip() or name.strip()
 
 
+# The Faculty table also holds external co-authors imported from publication data
+# (1,537 of 1,721 rows). They are needed for paper attribution but are not SU
+# faculty, so public-facing views and metrics must exclude them.
+def _su_affiliated():
+    return (
+        Q(directory_verified=True)
+        | Q(user__isnull=False)
+        | (Q(department__isnull=False) & ~Q(department=""))
+    )
+
+
 def _visible_faculty_qs():
-    return Faculty.objects.filter(profile_visibility=True).filter(
-        Q(is_approved=True) | Q(user__isnull=False)
+    return (
+        Faculty.objects.filter(profile_visibility=True)
+        .filter(Q(is_approved=True) | Q(user__isnull=False))
+        .filter(_su_affiliated())
     )
 
 

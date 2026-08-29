@@ -690,14 +690,59 @@ including the 181 from 2026.
 **Lesson:** when swapping a recursive copy for an excluding sync, audit what runs before it -
 exclusions only protect files that still exist.
 
+### 2026-08-29 10:41 - Full OpenAlex backfill + scaled category threshold
+
+- **Restore ID:** `DB-20260829-1039` (database) / `SRC-20260829-1041` (source)
+- **Artifacts:** `~/scoup-backups/db.sqlite3.pre-fullbackfill.*`,
+  `~/scoup-backups/views.py.before-mincount.*`
+- **File changed:** `academic/views.py`
+
+**1. Full historical backfill applied** (all years, not just 2026):
+
+| | |
+| --- | --- |
+| works fetched | 9,237 |
+| new papers | 8,392 |
+| existing updated | 845 |
+| skipped, no DOI | 376 |
+| author links created | 3,559 |
+| **total papers** | 846 -> **9,237** |
+| runtime | 78 seconds |
+
+Author resolution across the full corpus: name 2,701, initial 388, orcid 377, openalex 93.
+Faculty carrying an ORCID went 21 -> **226**; OpenAlex ids 51 -> **535**. 2,978 papers have at
+least one linked SU author. Year coverage is now continuous: 2026 (181), 2025 (225), 2024 (250),
+2023 (220), 2022 (214), 2021 (240).
+
+5,358 SU author names on these works still have no Faculty row - they are external co-authors
+plus SU people who were never imported. That is the remaining input to the admin review queue.
+
+**2. Category threshold now scales with the corpus.** A fixed floor was wrong twice in one
+session: `min_count=3` yielded 439 groups at 846 papers, then 4,245 once the corpus reached
+9,237. The default is now `max(5, total_papers // 300)`, so it tracks the data instead of
+drifting.
+
+| Corpus | Auto threshold | Categories shown |
+| --- | --- | --- |
+| 9,237 papers | 30 | **390** |
+
+`?min_count=` still overrides (e.g. `min_count=100` -> 142, `min_count=1` -> 13,161).
+
+Top categories are now real disciplines: Biology (3,330), Medicine (2,758), Computer science
+(2,732), Psychology (1,609), Chemistry (1,438). `/categories/computer-science/` reports 2,732
+papers, 87 faculty, 49,480 citations, average 18.11.
+
+- **Verification:** `manage.py check` clean; categories 390 by default; detail endpoint intact;
+  search "machine learning" returns four genuinely ML papers.
+- **Status:** In repo + repo DB. **NOT yet deployed** - live needs the import run separately,
+  since deploy no longer copies the database.
+
 ---
 
 ## Known open items
 
 | # | Item | Severity | Status |
 | --- | --- | --- | --- |
-| 1 | Full OpenAlex backfill (9,976 works; only 2026 loaded) | High | Open |
-| 2 | Categories exploded to 1,949 via OpenAlex concepts - too granular for the UI | High | Open |
 | 3 | 1,413 faculty unverified (mostly external co-authors); 128 pending review | High | Open |
 | 4 | ~40 frontend endpoints still missing (faculty portal, OTP auth, tickets, AI generation) | Medium | Open |
 | 5 | Six sidebar pages still placeholders (Search, Networks, Projects, Labs, Facilities, Institutions) | Medium | Open |
@@ -708,5 +753,5 @@ exclusions only protect files that still exist.
 | 10 | Frontend bundle is 1.1 MB; needs code-splitting | Low | Open |
 | 11 | `/var/www/.../templates` is `drwxr-x--- root root`, unreadable by the service | Low | Open |
 
-**Resolved:** DEBUG exposure, categories stub, search relevance, repo/deploy divergence,
+**Resolved:** full OpenAlex backfill, category granularity, DEBUG exposure, categories stub, search relevance, repo/deploy divergence,
 DB-overwriting deploy, `/var/www` git remote, broken `backupAll.sh` refs, deploy outage.
