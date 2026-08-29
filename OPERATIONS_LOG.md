@@ -1023,6 +1023,103 @@ but commit messages don't cleanly separate the two contributors for this one com
   sampled cleanly with zero write risk.
 - **Status:** In repo + repo DB. **NOT yet deployed** to `/var/www`.
 
+### 2026-08-29 15:20 - Faculty review queue: match evidence + venv restored
+
+- **Restore ID:** `SRC-20260829-1520`
+- **Artifacts:** `~/scoup-backups/db.sqlite3.pre-reviewqueue.20260829-151518`,
+  `~/scoup-backups/admin_views.py.before-evidence.*`,
+  `~/scoup-backups/import_su_schools.py.before-shared.*`
+- **Files added:** `academic/directory_match.py`,
+  `academic/management/commands/export_su_directory.py`, `data/su_directory.json`
+- **Files changed:** `academic/admin_views.py`,
+  `academic/management/commands/import_su_schools.py`, `academic/tests.py`
+
+**The queue was unreviewable.** All 126 pending records had an **empty `review_note`**, and the
+00:19 demotion had *cleared* their department and title. The admin was being asked to assert an
+identity with literally zero evidence on screen - the same blind-approval path that produced the
+*Shing Yip Lee -> Physics* false positive the demotion existed to undo.
+
+**Evidence is recomputed, not stored.** `directory_match.py` replays the importer's decision on
+demand and explains it, returning the candidate directory rows, the row that would be applied,
+and a plain-English reason. Six outcomes are distinguished:
+
+| `match_type` | Meaning |
+| --- | --- |
+| `exact` | one row matches the full first name (verification-grade) |
+| `initial` | exactly one row shares the first initial - **review required** |
+| `ambiguous` | several rows share surname (+initial); no row is selectable without guessing |
+| `no_first_name` | record has no first name to compare against |
+| `unmatched` | no directory row carries this surname |
+| `no_directory` | the cache has not been exported on this host |
+
+Applied to the live queue, every pending record now has a concrete reason:
+
+| Outcome | Count |
+| --- | --- |
+| `initial` (one plausible person) | **115** |
+| `ambiguous` (no safe answer) | **11** |
+| **total pending** | **126** |
+
+Note the count is **126, not the 128** recorded on 2026-08-29 00:19 - the 2 records that were
+already pending before the demotion have since been resolved.
+
+**Parsing is cached, not done per request.** `SUdirectory.pdf` takes ~20s to parse, so
+`export_su_directory` writes the 1,849 rows to `data/su_directory.json` (dry-run by default) and
+the API memoizes it. Room numbers are joined to `data/su_building_codes.json`, so evidence reads
+`HS230F - Henson Science Hall`; an unrecognised prefix yields nothing rather than a guess. This
+closes the join that open item #7 was waiting on.
+
+**Approving now completes the match.** These records are pending precisely because the directory
+fields were withheld, so approve accepts `apply_directory_match: true`, which writes title,
+department, room, phone and the resolved school, sets `directory_verified`, and records
+provenance in `review_note` ("Directory match confirmed by <admin>: ..."). When the evidence has
+no single candidate the endpoint returns **400 and leaves the record pending** - a reviewer
+cannot accidentally approve a guess. Plain approve is unchanged.
+
+**Shared school resolution.** `SchoolResolver` moved out of `import_su_schools` into
+`directory_match.py` so a queue approval and a bulk import resolve a department to the same
+school. Verified behaviour-identical: 182 faculty / 175 resolved / 0 needing update, same six
+unmatched departments before and after.
+
+**Serializer additions:** `primary_school`, `room`, `phone`, `orcid`, `openalex_id`, and
+`review_evidence` (attached automatically to pending rows, or on request via
+`?include_evidence=true`; the detail endpoint always includes it).
+
+**Verification.** `academic/tests.py` gained **18 tests** (was an empty stub) covering match
+classification, the no-guess guarantees, building resolution, and the full queue round trip
+including 401/403 access control. All pass.
+
+End-to-end curl check ran against a **throwaway copy** of the database
+(`DATABASE_URL=sqlite:////tmp/scoup-curl.sqlite3`) so no smoke-test user or review decision could
+reach real data - the failure mode noted in the 2026-08-28 19:05 entry. Confirmed afterwards that
+`db.sqlite3` still holds 126 pending and only the `rellis` user.
+
+| Step | Result |
+| --- | --- |
+| anonymous `GET /api/admin/faculty/?status=pending` | 401 |
+| authenticated list | 200, 126 records, all carrying evidence |
+| approve id 694 with `apply_directory_match` | 200; applied title, department, room, phone, school; `directory_verified=true` |
+| approve an ambiguous record with the same flag | **400**, record still pending, fields still blank |
+| reject with reason | 200; `is_approved=false`, `profile_visibility=false`, reason stored |
+| queue after one approve + one reject | 126 -> 124 |
+
+**Repo virtualenv restored.** `/home/rellis/scoup-backend/.venv` did not exist, so
+`scoup-backend-staging.service` (which hardcodes that path) could not have started, and the
+`manage.py` commands documented throughout this log had no interpreter. Rebuilt from
+`requirements.txt`. `.venv/` is gitignored.
+
+**Deployment note.** `data/` is gitignored, so `data/su_directory.json` reaches the server via
+the deploy `rsync`, not via git. If evidence ever renders as *"Directory cache missing"* on live,
+run:
+
+```bash
+cd /var/www/scoup2025.privatedns.org/scoup-backend
+./.venv/bin/python manage.py export_su_directory --apply
+```
+
+- **Verification:** `manage.py check` clean; 18/18 tests pass; curl round trip as tabled above.
+- **Status:** In repo. **NOT yet deployed.** No migration required - no schema change.
+
 ---
 
 ## Known open items
