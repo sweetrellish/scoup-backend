@@ -350,6 +350,8 @@ def public_search_data(request):
             faculty.append(
                 {
                     "id": str(item.faculty_id),
+                    # numeric pk, distinct from the slug above - what /faculty/<id>/public/ takes
+                    "profileId": item.pk,
                     "name": full_name,
                     "title": item.title or "",
                     "department": item.department or "",
