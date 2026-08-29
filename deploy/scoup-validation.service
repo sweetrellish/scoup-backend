@@ -1,0 +1,27 @@
+[Unit]
+Description=SCOUP database validation and ingest worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=rellis
+Group=www-data
+WorkingDirectory=/var/www/scoup2025.privatedns.org/scoup-backend
+ExecStart=/var/www/scoup2025.privatedns.org/scoup-backend/.venv/bin/python manage.py run_validation --apply
+TimeoutStartSec=3600
+Nice=10
+IOSchedulingClass=idle
+
+# The worker only needs its own tree; deny everything else.
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/var/www/scoup2025.privatedns.org/scoup-backend
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
