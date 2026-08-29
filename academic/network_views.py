@@ -135,7 +135,7 @@ def network_discovery(request):
                     ),
                     "title": member.title or "",
                     "department": member.department or "",
-                    "school": member.office or "",
+                    "school": member.school or "",
                     "photo": photo_url,
                     "email": member.email or "",
                     "bio": member.bio or "",

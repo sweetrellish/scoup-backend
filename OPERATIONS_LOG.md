@@ -477,6 +477,50 @@ Dry-run comparison:
 - **Verification:** both modes dry-run clean; `py_compile` passes.
 - **Status:** In repo. Behaviour-only change; no migration required.
 
+### 2026-08-29 09:25 - salisbury.edu ingestion: schools + department mapping
+
+- **Restore ID:** `DB-20260829-0925` (database) / `SRC-20260829-0925` (source)
+- **Artifacts:** `~/scoup-backups/db.sqlite3.pre-schools.*`, `~/scoup-backups/models.py.before-school.*`
+- **Files added:** `data/su_schools.json`,
+  `academic/management/commands/import_su_schools.py`,
+  `academic/migrations/0010_faculty_school.py`
+- **Files changed:** `academic/models.py`, `academic/network_views.py`
+
+**Fetching note.** `salisbury.edu` pages redirected the built-in fetcher to an ad-tracking pixel
+(`pixel.tapad.com` -> `tr.snapchat.com`) and returned no content. Retrieved with `curl` and a
+browser user-agent instead; all pages returned HTTP 200.
+
+**Extracted the six academic units** from `colleges-schools-and-departments.aspx`, then pulled
+department lists from each `academic-offices/<slug>/` page:
+
+| School | Departments |
+| --- | --- |
+| College of Health and Human Services | 9 |
+| Fulton School of Liberal Arts | 11 |
+| Henson School of Science & Technology | 6 |
+| Perdue School of Business | 6 |
+| Seidel School of Education | 3 |
+
+Saved to `data/su_schools.json` (35 departments). Clarke Honors College lists no departments.
+
+**New `Faculty.school` field**, populated by `import_su_schools` (dry-run by default). Matching
+folds the `&` vs `and` spelling difference between the directory PDF and the website, and falls
+back to a word-stem match for cases like "Mathematics" vs "Mathematical Sciences".
+
+Result: **94 of 96** faculty with a department resolved to a school. The 2 remaining are a record
+whose department is literally "Fulton School of Liberal Arts" and "Urban&Regional Planning
+Program".
+
+`network/discovery` now returns the real `school` (previously it incorrectly returned `office`,
+which is an office location, so the field was effectively empty).
+
+**Not obtained:** the research page is navigational only and lists no labs or centers, so Labs
+still has no data source. One facility was identified incidentally: Henson Medical Simulation
+Center.
+
+- **Verification:** `manage.py check` clean; discovery returns correct school per colleague.
+- **Status:** In repo + repo DB. **NOT yet deployed** - live needs `migrate` for `0010`.
+
 ---
 
 ## Known open items
