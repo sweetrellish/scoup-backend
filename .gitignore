@@ -79,3 +79,27 @@ staticfiles/
 *.txt
 core/
 
+# ── Local data, exports and artifacts (never publish) ────────────────
+db.sqlite3
+*.sqlite3
+scoup_db
+faculty_export.json
+faculty_export_clean.json
+verified_faculty.json
+
+# Source PDFs contain staff contact details - keep out of the public repo
+*.pdf
+
+# Logs and captured sessions
+*.log
+500-error-session.log
+
+# Collected static and local screenshots/refs
+staticfiles/
+refs/
+*.png
+*.jpg
+*.jpeg
+
+# Never track a deployed copy
+/var/

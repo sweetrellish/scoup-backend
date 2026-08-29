@@ -355,6 +355,59 @@ endpoint that accepts writes without auth, so it enforces:
   inquire 201; invalid email 400; missing target 400; throttle 429.
 - **Status:** In repo. **NOT yet deployed** - live needs `migrate` for `0008_networkinquiry`.
 
+### 2026-08-28 19:05 - Admin faculty validation surface
+
+- **Restore ID:** `SRC-20260828-1905`
+- **Type:** Source + schema
+- **Artifacts:** `~/scoup-backups/models.py.before-admin.*`
+- **Files added:** `academic/admin_views.py`,
+  `academic/migrations/0009_faculty_institutional_email_and_more.py`
+- **Files changed:** `academic/models.py`, `academic/urls.py`
+
+**Endpoints** (all `IsAdminUser`, matching `adminAPI` in `api.ts`):
+
+| Endpoint | Method | Purpose |
+| --- | --- | --- |
+| `/api/admin/me/` | GET, PATCH | admin profile |
+| `/api/admin/stats/` | GET | faculty/content/inquiry counts + department breakdown |
+| `/api/admin/faculty/` | GET | filter by `search`, `status`, `department`, `pending` |
+| `/api/admin/faculty/<id>/` | GET, PATCH, DELETE | record management |
+| `/api/admin/faculty/<id>/approve/` | POST | approve |
+| `/api/admin/faculty/<id>/reject/` | POST | reject with reason |
+| `/api/admin/faculty/bulk-action/` | POST | bulk approve/reject |
+| `/api/admin/faculty/<id>/message/` | POST | record admin -> faculty message |
+| `/api/admin/inquiries/` | GET | inquiry triage |
+| `/api/admin/inquiries/<id>/` | PATCH | status + admin notes |
+| `/api/admin/audit-log/` | GET | recent review activity |
+
+**New Faculty fields:** `review_status` (pending/approved/rejected), `review_note`,
+`institutional_email`, `institutional_email_verified`, `last_active`.
+**New NetworkInquiry fields:** `admin_notes`, `message_subject`, `source_type`, `reviewed_by`.
+
+Backfilled `review_status='approved'` for the 1,632 already-approved records.
+
+**Validation queue now measurable:**
+
+| Metric | Count |
+| --- | --- |
+| total faculty | 1,634 |
+| approved | 1,632 |
+| pending | 2 |
+| directory_verified | 221 |
+| unverified (mostly external co-authors) | 1,413 |
+
+`status=verified` / `status=unverified` filters let admins separate genuine SU faculty from
+imported external co-authors.
+
+**Access control verified:** anonymous -> 401, authenticated non-staff -> 403, staff -> 200.
+Invalid bulk action -> 400.
+
+**Note:** smoke-test inquiries and users created during verification were deleted, because the
+deploy script copies `db.sqlite3` to production and they would otherwise ship as real data.
+
+- **Verification:** `manage.py check` clean; stats/list/inquiries/audit/me all 200.
+- **Status:** In repo. **NOT yet deployed** - live needs `migrate` for `0009`.
+
 ---
 
 ## Known open items
