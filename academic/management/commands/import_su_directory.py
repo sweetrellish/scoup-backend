@@ -51,6 +51,14 @@ class Command(BaseCommand):
             action="store_true",
             help="Only match directory rows with an academic title",
         )
+        parser.add_argument(
+            "--include-initial",
+            action="store_true",
+            help=(
+                "Also write first-initial-only matches. Off by default: these produced "
+                "false positives (e.g. an external co-author labelled Physics faculty)."
+            ),
+        )
         parser.add_argument("--limit", type=int, default=0)
 
     def handle(self, *args, **opts):
@@ -74,6 +82,7 @@ class Command(BaseCommand):
 
         stats = collections.Counter()
         updates = []
+        review_candidates = []
 
         for faculty in Faculty.objects.all():
             last = normalize(faculty.last_name)
@@ -103,6 +112,12 @@ class Command(BaseCommand):
 
             if match is None:
                 stats["ambiguous" if len(candidates) > 1 else "unmatched"] += 1
+                continue
+
+            # Initial-only matches are review candidates, not verification-grade.
+            if confidence == "initial" and not opts["include_initial"]:
+                stats["initial_needs_review"] += 1
+                review_candidates.append((faculty, match))
                 continue
 
             changes = {}
@@ -139,9 +154,20 @@ class Command(BaseCommand):
                 + ", ".join(f"{k}={v!r}" for k, v in changes.items())
             )
 
+        if review_candidates:
+            self.stdout.write(
+                f"initial-only matches held for admin review: {len(review_candidates)}"
+            )
+
         if not apply_changes:
             self.stdout.write(self.style.WARNING("\nDRY RUN - re-run with --apply to write."))
             return
+
+        # Surface low-confidence candidates in the admin queue instead of writing them.
+        for faculty, _match in review_candidates:
+            if faculty.review_status != "pending":
+                faculty.review_status = "pending"
+                faculty.save(update_fields=["review_status", "updated_at"])
 
         now = timezone.now().astimezone(dt_timezone.utc)
         written = 0
@@ -149,7 +175,7 @@ class Command(BaseCommand):
             for field, value in changes.items():
                 setattr(faculty, field, value)
 
-            faculty.directory_verified = True
+            faculty.directory_verified = confidence == "exact"
             faculty.save(update_fields=list(changes) + ["directory_verified", "updated_at"])
             written += 1
 

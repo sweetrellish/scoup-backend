@@ -64,6 +64,24 @@ def _match_score(seed, candidate_terms):
     return round(min(score, 100.0), 2), sorted(set(shared))[:12]
 
 
+def _default_prominence(member):
+    """Ranking used when there is no query: surface real, well-described SU faculty.
+
+    Without a seed every overlap score is zero, which previously left the browse view
+    ordered purely by citations and dominated by imported external co-authors.
+    """
+    score = 0.0
+    if member.directory_verified:
+        score += 45.0
+    if member.department:
+        score += 10.0
+    if member.title:
+        score += 5.0
+    score += min(member.article_count or 0, 20)
+    score += min((member.total_citations or 0) / 100.0, 20.0)
+    return round(min(score, 100.0), 2)
+
+
 def _client_ip(request):
     forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
     if forwarded:
@@ -99,6 +117,8 @@ def network_discovery(request):
             score, shared = _match_score(seed, terms)
             if seed and score <= 0:
                 continue
+            if not seed:
+                score = _default_prominence(member)
             photo_url = ""
             if member.photo:
                 try:
@@ -125,7 +145,11 @@ def network_discovery(request):
                     "matchReason": (
                         f"Shares {len(shared)} research term(s) with your focus."
                         if shared
-                        else "Available SU faculty profile."
+                        else (
+                            "Directory-verified Salisbury University faculty."
+                            if member.directory_verified
+                            else "Listed from Salisbury University publication records."
+                        )
                     ),
                     "collaborationScore": member.article_count or 0,
                     "articleCount": member.article_count or 0,
@@ -134,8 +158,10 @@ def network_discovery(request):
                 }
             )
 
+        # Verified SU faculty outrank imported external co-authors.
         colleagues.sort(
-            key=lambda c: (c["matchScore"], c["totalCitations"]), reverse=True
+            key=lambda c: (c["directoryVerified"], c["matchScore"], c["totalCitations"]),
+            reverse=True,
         )
         colleagues = colleagues[:limit]
 

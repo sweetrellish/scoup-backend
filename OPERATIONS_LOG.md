@@ -408,6 +408,49 @@ deploy script copies `db.sqlite3` to production and they would otherwise ship as
 - **Verification:** `manage.py check` clean; stats/list/inquiries/audit/me all 200.
 - **Status:** In repo. **NOT yet deployed** - live needs `migrate` for `0009`.
 
+### 2026-08-29 00:19 - Discovery default ranking + directory match accuracy fix
+
+- **Restore ID:** `DB-20260829-0018` (database) / `SRC-20260829-0019` (source)
+- **Artifacts:** `~/scoup-backups/db.sqlite3.pre-strict.*`,
+  `~/scoup-backups/network_views.py.before-default-rank.*`
+- **File changed:** `academic/network_views.py`
+
+**1. Browse view was meaningless.** `/network/discovery/` with no `q` produced an empty seed, so
+every colleague scored **0.0** and the list was ordered purely by citations - dominated by
+imported external co-authors (Friess, Rogers, Lovelock) with blank departments. Only 9 of the
+first 40 were SU faculty. This is what made the Experts page look unremarkable.
+
+Added `_default_prominence()` for the no-query case: directory-verified +45, has department +10,
+has title +5, article count up to +20, citations up to +20. Sorting now puts
+`directoryVerified` first, then score, then citations. `matchReason` distinguishes verified SU
+faculty from publication-record entries. Query-driven ranking is unchanged.
+
+**2. Directory matching was over-trusting (data accuracy).** Of the 221 records marked
+`directory_verified`, only **95 were exact first-name matches**; **126 were first-initial only**.
+Spot check found a clear false positive: *Shing Yip Lee*, a mangrove ecologist and external
+co-author, was matched to a "Lee, S..." row and labelled **Assistant Professor, Physics** - and
+that wrong department was being served publicly.
+
+Corrected: initial-only matches were demoted to `directory_verified=False` and
+`review_status='pending'`, and the fields written from those matches were cleared - but only
+where the stored value still equalled what the importer wrote, so no unrelated data was touched.
+
+| | Before | After |
+| --- | --- | --- |
+| directory_verified | 221 | 95 (exact only) |
+| pending review | 2 | 128 |
+| fields cleared | - | 463 |
+
+Verified afterwards: *Shing Yip Lee* has no department/title and is pending review; the default
+browse view now returns only genuine SU faculty (Exercise Science, Biological Sciences,
+Marketing, Psychology, Economics, Physics).
+
+**Follow-up:** the 126 demoted records are legitimate review candidates for the admin queue via
+`/api/admin/faculty/?status=pending`. `import_su_directory` should default to exact-match-only
+for verification; initial matches belong in review, not auto-applied.
+
+- **Status:** In repo + repo DB. **NOT yet deployed.**
+
 ---
 
 ## Known open items
