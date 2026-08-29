@@ -1347,6 +1347,44 @@ regardless of browser, cache, or network.
   only the specific variable needed (`export ANTHROPIC_API_KEY=$(grep ... .env)`), and never build
   a frontend in a terminal that has sourced a backend `.env`, or vice versa.
 
+### 2026-08-29 18:32 - Publications-per-year chart no longer fakes a day-level trend
+
+- **Restore ID:** `SRC-20260829-1832`
+- **Files changed:** `academic/views.py` (backend, deployed), and in
+  `scoup-frontend-2.0`: `src/data/searchData.ts`, `src/utils/datasetNormalization.ts`,
+  `src/components/Home.tsx` (committed, push pending the user's SSH passphrase)
+
+**Two separate things got conflated in earlier reports, now both confirmed and handled:**
+
+1. The 1727 date-range question - still open, blocked on the OpenAlex quota reset (unrelated to
+   this entry; that's the Salisbury-place-name contamination, a different problem).
+2. The "spike in 2020" the user saw - traced to **653 papers dated exactly 2019-01-01**, and
+   **2,220 across the whole corpus** sharing the same pattern. Root cause: `import_full_dataset`
+   only had a bare year for these records, and `parse_date_any()` defaults a year-only value to
+   `date(year, 1, 1)`. Not fake papers, not contamination - genuine papers with imprecise original
+   metadata, all colliding onto one calendar day per year.
+
+**Also newly understood:** the admin dashboard's "Publications Per Year" panel showing "No
+Publication Data" earlier today was the `VITE_API_BASE_URL` incident, not a separate bug - the
+chart reads `publicDataset.papersData` client-side, which was empty because the whole site was
+calling the dead Render backend at the time.
+
+**Fix, not a workaround.** Added `datePrecise` to the public dataset's paper serialization -
+`false` when the stored date is exactly day=1/month=1 (2,220 of 9,237). `Home.tsx`'s trend chart
+now excludes those papers from the year-by-year line (so 2019 shows its real ~192 precisely-dated
+papers instead of an inflated 845), while the total-publications figure still counts all of them,
+with an explicit footnote: "N additional publications have only an approximate (year-only) date
+and are not shown in the trend above." Nothing is hidden or deleted - the honest count is still
+visible, just not smeared across a fake single day.
+
+- **Verification:** backend - `manage.py check` clean, deployed, confirmed `datePrecise` present
+  and correctly split (2,220 imprecise / 9,237 total) in the live API response. Frontend -
+  `npx tsc --noEmit` shows no new errors (pre-existing unrelated errors only), all new CSS classes
+  verified already present in `src/index.css`, built clean, deployed, home page 200 live.
+- **Status:** Backend deployed. Frontend deployed to `/var/www`. Frontend commit **not yet pushed
+  to GitHub** - `~/.ssh/id_ed25519` needs the user's passphrase, same as the earlier profile-page
+  work; live site already has the code since it was built directly from the working tree.
+
 ---
 
 ## Known open items
