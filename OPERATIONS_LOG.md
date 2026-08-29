@@ -971,6 +971,23 @@ silently recreated. `rellis` is now the sole user in both databases.
 
 - **Status:** Applied to repo DB and live DB.
 
+### 2026-08-29 14:33 - Live deploy caught up; validation timer installed
+
+- **Restore ID:** `DB-20260829-1433`
+- **Artifact:** `~/scoup-backups/varwww-db.sqlite3.pre-recalc.*`
+
+Copied `recalc_faculty_metrics.py` / `run_validation.py` to live (only files missing vs. repo -
+`views.py` and migrations were already current). Ran `recalc_faculty_metrics --apply` on live:
+**1,466 records corrected**. Papers were already 9,237 on both sides, so the OpenAlex backfill
+needed no further action. The 87 dual-source faculty from the 11:03 entry were created by an
+ad-hoc script, not a management command, so they still only exist in the repo DB - noted as a
+gap, not reproduced here to conserve time.
+
+Installed `scoup-validation.timer` on the live host (`systemctl enable --now`) - next run
+tomorrow 03:30-03:45.
+
+- **Status:** Live DB metrics current. Worker active on schedule.
+
 ---
 
 ## Known open items
