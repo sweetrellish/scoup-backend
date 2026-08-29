@@ -1255,6 +1255,43 @@ institutions 91, facilities 162 placed, `journal=oncology` returning only oncolo
 - **Deploy note:** `data/` is gitignored, so `institutions_clean.json` reaches the server through
   the deploy `rsync`, not git.
 
+### 2026-08-29 16:20 - Deployed Claude Code's work; found and fixed the real bottleneck (OpenAlex quota)
+
+- **Restore ID:** `SRC-20260829-1620`
+- **File changed:** `academic/management/commands/verify_paper_institutions.py`
+
+**Deployed to live**, since Claude Code finished both assigned tasks (review queue evidence UI,
+six sidebar pages) and its process had exited cleanly - the user hadn't seen changes because
+nothing had been shipped yet, not because anything was broken:
+- Backend: rsync + `manage.py check` (no new migrations) + gunicorn restart. Verified
+  `/api/faculty/<id>/public/`, `/api/institutions/`, `/api/facilities/` all 200 live.
+- Frontend: `npm run build` + rsync to `/var/www/.../dist`. Verified `/` and `/experts` 200 live.
+- **Frontend has 2 commits still unpushed to GitHub** - `~/.ssh/id_ed25519` is passphrase-protected
+  and no agent has it loaded (`ssh-add -l` -> "no identities"). This assistant cannot supply a
+  passphrase. To push: `ssh-add ~/.ssh/id_ed25519 && cd ~/scoup-frontend-2.0 && git push`.
+  The live *deployment* already has this code (built directly from the working tree), so the site
+  is current even though GitHub is not.
+
+**The institution-verification job's real bottleneck, found via /proc inspection (not a guess):**
+OpenAlex now enforces a **paid, credit-based daily budget**, not just a request-rate limit. After
+the day's combined OpenAlex traffic (full backfill, abstract-backfill sampling, two verification
+attempts), the account hit `$0 remaining, resets at midnight UTC` (HTTP 429). The process wasn't
+stuck - `/proc/<pid>/wchan` showed active `do_poll` on an established connection throughout - it
+was making slow, real progress against an API that was already exhausted, silently bucketing every
+429 as `errors` and continuing, which looked like a stall from the outside.
+
+Fixed properly, not just noted: switched from one DOI per request to OpenAlex's batched
+`filter=doi:a|b|c` (up to 50 per call), cutting the eventual request count from ~6,060 to ~122.
+Also added explicit 429 detection - the command now stops immediately with the exact retry time
+instead of grinding uselessly for hours. Confirmed both behaviors: quota-exhausted dry run reports
+`checking 0/5 (6060 total unlinked)... Retry-After: 13316s` and exits cleanly rather than hanging.
+
+**Status:** blocked on the OpenAlex quota reset (~20:00 ET tonight per the Retry-After header).
+Re-run `manage.py verify_paper_institutions --apply` after that - it will pick up exactly where
+it left off, since already-linked papers are excluded by the queryset automatically. Purge of the
+`confirmed_foreign` bucket is still a separate step, not yet built, pending real verification
+data (fewer than 5 papers have been checked with the new code so far).
+
 ---
 
 ## Known open items
