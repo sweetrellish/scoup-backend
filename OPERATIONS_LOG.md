@@ -988,6 +988,41 @@ tomorrow 03:30-03:45.
 
 - **Status:** Live DB metrics current. Worker active on schedule.
 
+### 2026-08-29 15:22 - Public faculty profile endpoint (parallel work alongside Claude Code)
+
+- **Restore ID:** `SRC-20260829-1522`
+- **Files added:** `academic/public_profile_views.py`,
+  `academic/management/commands/backfill_abstracts.py`
+- **File changed:** `academic/urls.py` (+2 lines only, additive)
+
+Built the missing public faculty profile (item #12) while the Claude Code worker handled the
+review queue and sidebar pages in the same working tree - see note below on that.
+
+**`GET /api/faculty/<id>/public/`** - `AllowAny`, read-only. Restricted to `_su_affiliated()` +
+`profile_visibility=True`, excludes `review_status="rejected"`. Returns name, title, department,
+school, room, phone (all already public via the SU directory), photo, bio, ORCID, verification
+badge, metrics, keywords/categories, and up to 50 papers sorted by citations. No direct email is
+exposed - introductions still go through the existing throttled `/network/inquire/` endpoint.
+Verified against a live dev server: Enyue Lu (id 405) returns the correct 31 articles / 119
+citations / 3.84 avg; an unknown id returns 404.
+
+**`backfill_abstracts` - tested, low yield, not run at scale.** 3,630 papers have no abstract and
+a resolvable DOI. Sampled 170 of them against OpenAlex by DOI: **0 had an abstract upstream
+either** - these are closed-access works whose publishers don't release abstracts to OpenAlex, not
+an import bug. Keeping the command (idempotent, harmless) for any future case where it might help,
+but this specific backlog cannot be fixed this way. Item #15 stays open; a real fix would need a
+different abstract source or accepting reduced search weight for these papers.
+
+**Working-tree note.** This assistant and the backgrounded Claude Code worker operate on the same
+checkout, not separate worktrees. The worker periodically stages and commits its own progress
+(seen here: `tests.py` changes), and one of its commits swept up these new files along with its
+own - see `8a06832`. Nothing was lost or corrupted (verified via `git show --stat` per commit),
+but commit messages don't cleanly separate the two contributors for this one commit.
+
+- **Verification:** `manage.py check` clean; endpoint tested end-to-end; abstract backfill dry-run
+  sampled cleanly with zero write risk.
+- **Status:** In repo + repo DB. **NOT yet deployed** to `/var/www`.
+
 ---
 
 ## Known open items
@@ -1003,10 +1038,10 @@ tomorrow 03:30-03:45.
 | 9 | `patentsData` / `projectsData` are empty, so those panels render zeros | Low | Open |
 | 10 | Frontend bundle is 1.1 MB; needs code-splitting | Low | Open |
 | 11 | `/var/www/.../templates` is `drwxr-x--- root root`, unreadable by the service | Low | Open |
-| 12 | No **public** faculty profile page; only the authenticated self-service dashboard exists | Medium | Open |
+| 12 | Public faculty profile **backend** endpoint built (`/api/faculty/<id>/public/`); frontend page still needed | Medium | Partly resolved |
 | 13 | Validation worker built; systemd timer not yet installed on the server | Medium | Partly resolved |
 | 14 | 6,062 of 9,237 papers have no linked author (legacy dataset has no institution filter); they cannot surface on a profile and pollute search/category corpus | High | Open |
-| 15 | 3,630 papers have no abstract, weakening search recall | Medium | Open |
+| 15 | 3,630 papers have no abstract; sampled OpenAlex re-fetch found 0/170 recoverable (closed-access, not an import bug) | Medium | Open, likely unrecoverable via OpenAlex |
 
 **Resolved:** full OpenAlex backfill, category granularity, DEBUG exposure, categories stub, search relevance, repo/deploy divergence,
 DB-overwriting deploy, `/var/www` git remote, broken `backupAll.sh` refs, deploy outage.
