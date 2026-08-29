@@ -788,6 +788,42 @@ SU-scoped queryset.
   admin stats returns the new split.
 - **Status:** In repo + repo DB. **NOT yet deployed.**
 
+### 2026-08-29 11:18 - Stale denormalized faculty metrics recomputed
+
+- **Restore ID:** `DB-20260829-1118`
+- **Artifact:** `~/scoup-backups/db.sqlite3.pre-recalc.*`
+- **File added:** `academic/management/commands/recalc_faculty_metrics.py`
+
+**Reported symptom:** searching Computer Science showed Enyue Lu with 29 papers, but her faculty
+card showed 1.
+
+**Cause - the card was wrong, not the search.** `article_count`, `total_citations` and
+`average_citations` are *denormalized fields* written by the original import. Ingesting 9,237
+OpenAlex works created the `authors` links but never refreshed those stored numbers, so they
+drifted. Enyue Lu had `article_count=1` while **31** papers were linked to her.
+
+This was systemic, not a one-off: **163 of 182** directory-verified faculty (and 1,553 of 1,721
+rows overall) had `article_count` disagreeing with their linked papers.
+
+`recalc_faculty_metrics` recomputes all three fields from the actual `papers` relation.
+Dry-run by default; `--apply` writes; `--only-affiliated` limits to SU records.
+
+| | Before | After |
+| --- | --- | --- |
+| Enyue Lu article_count | 1 | **31** |
+| Enyue Lu total_citations | 0 | **119** |
+| Enyue Lu average_citations | 0.0 | **3.84** |
+| verified faculty mismatched | 163 | **0** |
+
+1,553 records updated.
+
+**Why this recurs:** any ingest that adds papers invalidates these fields. The command is
+idempotent and cheap, so it is the natural first job for the scheduled validation worker -
+it should run after every OpenAlex import.
+
+- **Verification:** `manage.py check` clean; zero verified faculty mismatched after the run.
+- **Status:** In repo + repo DB. **NOT yet deployed.**
+
 ---
 
 ## Known open items
@@ -803,6 +839,8 @@ SU-scoped queryset.
 | 9 | `patentsData` / `projectsData` are empty, so those panels render zeros | Low | Open |
 | 10 | Frontend bundle is 1.1 MB; needs code-splitting | Low | Open |
 | 11 | `/var/www/.../templates` is `drwxr-x--- root root`, unreadable by the service | Low | Open |
+| 12 | No **public** faculty profile page; only the authenticated self-service dashboard exists | Medium | Open |
+| 13 | No scheduled validation worker; metric drift is currently fixed manually | Medium | Open |
 
 **Resolved:** full OpenAlex backfill, category granularity, DEBUG exposure, categories stub, search relevance, repo/deploy divergence,
 DB-overwriting deploy, `/var/www` git remote, broken `backupAll.sh` refs, deploy outage.
