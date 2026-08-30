@@ -1554,6 +1554,90 @@ completely disconnected from any actual faculty.
   `/api/public/search-data/` confirmed `papersData` length dropped to 9,041; gunicorn restarted.
 - **Status:** Applied to repo and live.
 
+### 2026-08-30 07:45 - Category detail now returns the whole group, plus per-expert prominence
+
+- **Restore ID:** `SRC-20260830-0745`
+- **Type:** Source code
+- **Artifacts:**
+  - `~/scoup-backups/views.py.before-expertisemap.20260830-071043`
+  - `~/scoup-backups/network_views.py.before-expertisemap.20260830-071043`
+- **Files changed:** `academic/views.py`, `academic/network_views.py`
+- **Restore:**
+
+  ```bash
+  cp ~/scoup-backups/views.py.before-expertisemap.20260830-071043 \
+     /home/rellis/scoup-backend/academic/views.py
+  cp ~/scoup-backups/network_views.py.before-expertisemap.20260830-071043 \
+     /home/rellis/scoup-backend/academic/network_views.py
+  cd /home/rellis/scoup-backend && ./.venv/bin/python manage.py check
+  ```
+
+Driven by the Expertise Map rebuild in the frontend (see that log for 2026-08-30). No new
+endpoint was added: the page uses `/api/categories/` and `/api/categories/<slug>/`, which
+already existed. Three changes, one of them a real data bug.
+
+**1. The list and the detail disagreed about who is in a category - the list was right.**
+`categories_list` groups the flat taxonomy by the segment before the first comma, so
+`Sociology` counts `Sociology`, `Sociology, general`, `Sociology, demography, and population
+studies` and so on together: **53 experts**. `category_detail` resolved a slug to an *exact*
+name first and stopped there if it found one. `Sociology` does exist as a literal keyword (on
+papers), so the detail returned only that bucket - and because faculty carry the long
+comma-qualified names while papers carry the short one, it answered **0 faculty** for an area
+the list advertises as the largest on campus.
+
+Verified before and after, against a throwaway copy of the database:
+
+| Slug | faculty in list | faculty in detail (before) | after |
+| --- | --- | --- | --- |
+| `sociology` | 41 | **0** | 41 |
+| `public-health` | 24 | 24 | 24 |
+| `computer-science` | 11 | 11 | 11 |
+| `sociology-general` (mid-level) | - | 39 | 39 (unchanged) |
+| `nonexistent-thing` | - | 404 | 404 (unchanged) |
+
+(The 41 vs the 53 above is only the repo snapshot being a few hours behind live; the point is
+the two endpoints now agree with each other.) The resolver now unions the exact match with the
+group, so a top-level slug returns what the list promised and a mid-level slug is untouched.
+This also fixes the same hole on `/browse/<slug>`, which shares the endpoint.
+
+**2. `_default_prominence` moved from `network_views.py` to `views.py`.** `category_detail`
+needed the same 0-100 score `network_discovery` ranks people by, and `network_views` already
+imports from `views`, so the definition moved down rather than being duplicated (a copy would
+have drifted). `network_views` imports it; weights are unchanged - directory verification 45,
+listed department 10, title 5, papers up to 20, citations up to 20. Both surfaces now report
+the same number for the same person (Chao Miao 91.08 on `/network/discovery/` and on
+`/api/categories/sociology/`).
+
+**3. Fields added, all derived from data that is actually populated.**
+
+| Endpoint | Field | Why |
+| --- | --- | --- |
+| `/api/categories/` | `total_citations` | citations across the area's papers |
+| `/api/categories/` | `expert_prominence` | mean `_default_prominence` over the area's experts; `0.0` where no SU faculty is mapped, which is most of the taxonomy |
+| `/api/categories/<slug>/` faculty | `directory_verified` | the frontend needs the real verification signal rather than assuming it |
+| `/api/categories/<slug>/` faculty | `matched_categories` | the exact taxonomy strings on that person that put them in this area - real evidence for "why is this person here", and what the subtopic chips filter on |
+| `/api/categories/<slug>/` faculty | `prominence` | the same score as above, per person |
+
+`themes` on the faculty payload now drops the literal string `"[]"`, which a number of records
+store and which was rendering as a tag.
+
+**Deliberately not added: anything resembling the reference product's five
+Acad/Prac/Pub/Collab/Net scores.** `Faculty.academic`, `.practice` and `.publication` are
+populated on 86 of 1,719 records and hold raw counts, not 0-100 scores, and there is no
+collaboration or network field at all. Scaling those into bars would have been fabrication.
+
+- **Verification:** `manage.py check` clean; `manage.py test academic` **48/48 pass**;
+  `/api/network/discovery/` still ranks identically after the helper move. No performance
+  regression - `/api/categories/` takes 3.2 s locally with the change against 3.4 s on live
+  without it (the cost is the pre-existing full-corpus scan in `_category_index`, not this).
+  All checks ran against a **throwaway copy** at `/tmp/scoup-verify/db-throwaway.sqlite3`;
+  no command in this task wrote to the repo or live database.
+- **Status:** In repo, **not deployed**. `/var/www` was not touched.
+- **Note for the deploy:** the frontend change is safe to ship first - it degrades cleanly
+  against a backend without these fields (verified against live: no console errors, prominence
+  bars simply absent) - but the Expertise Map only shows the correct expert lists once *this*
+  backend change is live.
+
 ---
 
 ## Known open items
@@ -1577,6 +1661,7 @@ completely disconnected from any actual faculty.
 | 17 | `FRONTEND_ORIGINS` / CORS in `scoupdb/settings.py` is hardcoded with no environment override, so a dev server must run on port 3000 | Low | Open |
 | 19 | Home-page search cannot link to a profile: `/api/public/search-data/` returns `faculty_id` slugs, not the pk the profile endpoint takes. Adding the pk to that payload would let `SearchResults`/`FacultySlideOver` link too | Low | **Resolved** 2026-08-29 - `profileId` added to the payload (commit `ac37ffc`) and both components now link through it; see the frontend log for 18:50 |
 | 20 | `GET /api/contact/settings/` does not exist, but the frontend `/docs` page calls it on every load and gets a 404 | Low | **Resolved** 2026-08-29 - whole Contact backend built; see the 18:55 entry |
+| 22 | `/api/categories/` takes ~3.2 s: `_category_index()` walks every paper and faculty record on each request, with no caching | Low | Open - acceptable today, will not scale with the corpus |
 | 21 | Nginx has no `location /media/`, so uploaded photos return `index.html` (200 text/html) instead of the file. Affects contact team photos **and** faculty photos | Medium | Open - needs a root nginx change + reload |
 | 18 | The repo virtualenv `/home/rellis/scoup-backend/.venv` was missing, so `scoup-backend-staging.service` could not start | Medium | Resolved 2026-08-29 - rebuilt from requirements.txt |
 
