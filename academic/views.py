@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 import logging
 import re
 import uuid
@@ -550,22 +552,89 @@ def _paper_field_text(paper):
     }
 
 
+# OpenAlex's automatic concept-tagging is noisy for interdisciplinary-sounding papers -
+# e.g. a paper entirely about reading-comprehension pedagogy carried "Computer science"
+# and "Artificial intelligence" among 16 scattered tags, which alone earned a "computer
+# science" query a 99% match. A paper with a long, disparate keyword list is proven
+# weaker per-tag evidence than a short, focused one, so scale the field's trust down as
+# the list grows past a size where tags still plausibly describe one coherent topic.
+_FOCUSED_KEYWORD_COUNT = 6
+
+
+def _keyword_trust(keyword_list):
+    if not keyword_list:
+        return 1.0
+    return min(1.0, _FOCUSED_KEYWORD_COUNT / len(keyword_list))
+
+
+# Same problem, different shape: even a short keyword list can carry a broad OpenAlex
+# umbrella field ("Computer science", "Political science", "Library science" all showed
+# up as false positives) that a huge share of the whole corpus is tagged with. Discount
+# individual keywords by how common they are corpus-wide - the classic TF-IDF fix for
+# over-trusting common terms - built from a cached document-frequency table so no
+# per-request corpus scan is needed.
+_KEYWORD_DOC_FREQ_PATH = Path(__file__).resolve().parent.parent / "data" / "keyword_document_frequency.json"
+_KEYWORD_COMMON_THRESHOLD = 150  # a keyword on this many+ papers is a broad field, not a topic
+
+
+def _load_keyword_doc_freq():
+    try:
+        payload = json.loads(_KEYWORD_DOC_FREQ_PATH.read_text())
+        return payload.get("counts", {})
+    except (OSError, ValueError):
+        return {}
+
+
+_KEYWORD_DOC_FREQ = _load_keyword_doc_freq()
+
+
+def _keyword_specificity(keyword):
+    freq = _KEYWORD_DOC_FREQ.get(keyword.strip().lower())
+    if not freq:
+        return 1.0
+    return min(1.0, _KEYWORD_COMMON_THRESHOLD / freq)
+
+
 def _score_paper(paper, tokens, phrase):
     """Return (confidence 0-100, matched field names) for a lexical match."""
     fields = _paper_field_text(paper)
     keyword_list = _normalize_keyword_list(paper.keywords)
+    keyword_trust = _keyword_trust(keyword_list)
 
     matched_fields = set()
     matched_tokens = 0
     weight_sum = 0.0
+    # A token whose only evidence is a heavily-discounted, promiscuous keyword list
+    # (e.g. "computer" appearing only via a 16-tag scattergun list on a reading-
+    # comprehension paper) should not count as genuinely matched at all - it is
+    # noise, not corroboration, and letting it satisfy "every term must match" is
+    # exactly what let that paper score 99% for "computer science".
+    _MIN_REAL_MATCH_WEIGHT = 1.0
 
     for token in tokens:
         token_weight = 0.0
         for field_name, text in fields.items():
+            if field_name == "keywords":
+                # Score against individual keywords, not the joined blob, so a
+                # match against one common umbrella tag ("computer science" on
+                # 30% of the corpus) is discounted independently of any other
+                # keyword on the same paper.
+                best_kw_weight = 0.0
+                for kw in keyword_list:
+                    if _word_match(token, kw.lower()):
+                        specificity = _keyword_specificity(kw)
+                        best_kw_weight = max(best_kw_weight, _FIELD_WEIGHTS["keywords"] * keyword_trust * specificity)
+                if best_kw_weight:
+                    token_weight = max(token_weight, best_kw_weight)
+                    if best_kw_weight >= _MIN_REAL_MATCH_WEIGHT:
+                        matched_fields.add(field_name)
+                continue
             if _word_match(token, text):
-                token_weight = max(token_weight, _FIELD_WEIGHTS[field_name])
-                matched_fields.add(field_name)
-        if token_weight:
+                field_weight = _FIELD_WEIGHTS[field_name]
+                token_weight = max(token_weight, field_weight)
+                if field_weight >= _MIN_REAL_MATCH_WEIGHT:
+                    matched_fields.add(field_name)
+        if token_weight >= _MIN_REAL_MATCH_WEIGHT:
             matched_tokens += 1
             weight_sum += token_weight
 
@@ -586,9 +655,10 @@ def _score_paper(paper, tokens, phrase):
 
     confidence = 100.0 * (0.45 * density + 0.25 * breadth + 0.30 * coverage)
 
-    exact_keyword = any(k.lower() == phrase for k in keyword_list)
+    exact_match_kw = next((k for k in keyword_list if k.lower() == phrase), None)
+    exact_keyword = exact_match_kw is not None
     if exact_keyword:
-        confidence += 12.0
+        confidence += 12.0 * keyword_trust * _keyword_specificity(exact_match_kw)
     if phrase and len(tokens) > 1:
         if phrase in fields["title"]:
             confidence += 12.0
