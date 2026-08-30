@@ -1522,6 +1522,38 @@ institution tag) and were correctly not trusted.
 - **Status:** Applied to live. `sync_paper_author_links` is now the standing fix for this class of
   gap if it recurs (e.g. if any other faculty get created via a scalar-only sync in the future).
 
+### 2026-08-30 07:26 - 196 pre-1925 papers purged; conclusive proof OpenAlex tagging is unreliable here
+
+- **Restore ID:** `SRC-20260830-0726`
+- **Artifact:** `~/scoup-backups/db.sqlite3.pre-prefounding-purge.*`,
+  `~/scoup-backups/varwww-db.sqlite3.pre-prefounding-purge.*`
+- **File added:** `academic/management/commands/purge_pre_founding_papers.py`
+
+**The proof that settled the open question from last night.** The 1727 letter about "a physician
+at Salisbury" - the same one flagged in the 15:39 entry as clearly not genuine SU research - had
+been classified `genuine_su_unlinked` by `verify_paper_institutions`, because OpenAlex itself
+tagged an author on that work with the Salisbury University institution ID. That is impossible:
+the university was not founded until 1925, 198 years later. This is not an edge case to interpret
+either way - it is direct proof that OpenAlex's own institution attribution is unreliable for this
+sparse, centuries-old metadata, which is exactly why the `genuine_su_unlinked` bucket (6,053
+papers) was never trusted wholesale.
+
+**Fix:** rather than trying to further tune the OpenAlex-based check, used a harder, independent
+signal: any paper with zero linked Faculty and a publication date before 1925 cannot be genuine SU
+research, regardless of what any external institution tag claims. `purge_pre_founding_papers`
+found and deleted exactly the 196 papers already tracked as `papers_before_su_founding_unlinked`
+in the validation worker's audit - an 1722 book on mollusks, an 1858 phthisis treatment paper, an
+1859 "What is Psychology?" essay, and so on. All real journal content, just centuries too old and
+completely disconnected from any actual faculty.
+
+| | Before | After |
+| --- | --- | --- |
+| papers total | 9,237 | **9,041** |
+
+- **Verification:** dry-run matched apply exactly (196/196) on both repo and live; live
+  `/api/public/search-data/` confirmed `papersData` length dropped to 9,041; gunicorn restarted.
+- **Status:** Applied to repo and live.
+
 ---
 
 ## Known open items
