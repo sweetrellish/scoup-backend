@@ -9,13 +9,25 @@ is a deliberate, evidenced decision, not routine data entry.
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAdminUser
+from rest_framework.permissions import BasePermission, IsAdminUser
 from rest_framework.response import Response
 
 from academic.models import Paper
 
 
+class IsSuperUser(BasePermission):
+    """5,982 unverified papers is a personal review queue, not a general staff tool."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.is_superuser)
+
+
 def _serialize_admin_paper(paper):
+    # `faculty_members` is a denormalised list of *author name strings* copied
+    # from the source record. It is NOT evidence of an SU affiliation - every one
+    # of the 5,982 restored papers has a non-empty faculty_members and zero rows
+    # in the authors M2M. `linked_faculty` is the real signal: the SU Faculty
+    # profiles actually joined to this paper, which is what the purge tested.
     return {
         "id": paper.pk,
         "doi": paper.doi,
@@ -26,6 +38,10 @@ def _serialize_admin_paper(paper):
         "citations": paper.tc_count,
         "keywords": (paper.keywords or [])[:15],
         "faculty_members": paper.faculty_members or [],
+        "linked_faculty": [
+            {"id": f.pk, "name": f.name, "department": f.department or ""}
+            for f in paper.authors.all()
+        ],
         "review_status": paper.review_status,
         "review_note": paper.review_note,
         "url": paper.url or "",
@@ -33,9 +49,9 @@ def _serialize_admin_paper(paper):
 
 
 @api_view(["GET"])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperUser])
 def admin_paper_list(request):
-    qs = Paper.objects.all()
+    qs = Paper.objects.all().prefetch_related("authors")
 
     search = (request.query_params.get("search") or "").strip()
     if search:
@@ -60,7 +76,7 @@ def admin_paper_list(request):
 
 
 @api_view(["POST"])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperUser])
 def admin_paper_approve(request, pk):
     paper = Paper.objects.filter(pk=pk).first()
     if not paper:
@@ -72,7 +88,7 @@ def admin_paper_approve(request, pk):
 
 
 @api_view(["POST"])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperUser])
 def admin_paper_reject(request, pk):
     paper = Paper.objects.filter(pk=pk).first()
     if not paper:
@@ -85,7 +101,7 @@ def admin_paper_reject(request, pk):
 
 
 @api_view(["POST"])
-@permission_classes([IsAdminUser])
+@permission_classes([IsSuperUser])
 def admin_paper_bulk_action(request):
     data = request.data if isinstance(request.data, dict) else {}
     action = str(data.get("action") or "").strip().lower()
