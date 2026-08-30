@@ -981,10 +981,10 @@ def categories_list(request):
         for name, bucket in index.items():
             top = _split_top_level(name)
             group = groups.setdefault(
-                top, {"papers": set(), "faculty": set(), "children": {}}
+                top, {"papers": {}, "faculty": {}, "children": {}}
             )
-            group["papers"].update(p.pk for p in bucket["papers"])
-            group["faculty"].update(f.pk for f in bucket["faculty"])
+            group["papers"].update({p.pk: p for p in bucket["papers"]})
+            group["faculty"].update({f.pk: f for f in bucket["faculty"]})
             if name != top:
                 group["children"][name] = (
                     len(bucket["papers"]),
@@ -1002,12 +1002,26 @@ def categories_list(request):
                 }
                 for child, counts in sorted(group["children"].items())
             ]
+            experts = list(group["faculty"].values())
+            prominences = [_default_prominence(member) for member in experts]
             payload.append(
                 {
                     "name": top,
                     "slug": slugify(top),
                     "article_count": len(group["papers"]),
                     "faculty_count": len(group["faculty"]),
+                    "total_citations": sum(
+                        p.tc_count or 0 for p in group["papers"].values()
+                    ),
+                    # Mean of the same score network_discovery ranks people by, over
+                    # this area's experts. 0.0 when the area has no SU faculty mapped
+                    # to it at all - which is most of the taxonomy, and is a fact
+                    # worth showing rather than hiding.
+                    "expert_prominence": round(
+                        sum(prominences) / len(prominences), 2
+                    )
+                    if prominences
+                    else 0.0,
                     "mid_level_categories": mids,
                 }
             )
