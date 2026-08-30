@@ -2,6 +2,12 @@ from django.urls import path
 from django.conf import settings
 from django.conf.urls.static import static
 from . import views
+from .admin_paper_views import (
+    admin_paper_list,
+    admin_paper_approve,
+    admin_paper_reject,
+    admin_paper_bulk_action,
+)
 from .public_profile_views import faculty_public_profile
 from .auth import EmailOrUsernameTokenObtainPairView
 from .admin_views import (
@@ -72,6 +78,10 @@ urlpatterns = [
     path("admin/audit-log/", admin_audit_log, name="admin-audit-log"),
     path("admin/faculty/", admin_faculty_list, name="admin-faculty-list"),
     path("admin/faculty/bulk-action/", admin_faculty_bulk_action, name="admin-faculty-bulk"),
+    path("admin/papers/", admin_paper_list, name="admin-paper-list"),
+    path("admin/papers/bulk-action/", admin_paper_bulk_action, name="admin-paper-bulk"),
+    path("admin/papers/<int:pk>/approve/", admin_paper_approve, name="admin-paper-approve"),
+    path("admin/papers/<int:pk>/reject/", admin_paper_reject, name="admin-paper-reject"),
     path("admin/faculty/<int:pk>/", admin_faculty_detail, name="admin-faculty-detail"),
     path("admin/faculty/<int:pk>/approve/", admin_faculty_approve, name="admin-faculty-approve"),
     path("admin/faculty/<int:pk>/reject/", admin_faculty_reject, name="admin-faculty-reject"),
