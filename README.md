@@ -2,7 +2,7 @@
 
 This repository contains the Django backend for the SCOUP research-discovery platform. It provides the public data feed, faculty and paper review logic, admin approval workflows, and the server-side trust boundaries that determine what is public vs what remains in an internal review queue.
 
-This README is intentionally supplemental to the older project notes. It reflects the current architecture as of 2026-08-30.
+This README is intentionally supplemental to the older project notes. It reflects the current architecture and product boundaries without exposing deployment details.
 
 ---
 
@@ -159,9 +159,9 @@ These are important for anyone maintaining or presenting the system:
 
 This backend includes the current project notes and architecture references:
 
+- `docs/documentation-index.md` — entry point for the current documentation set
 - `docs/website-architecture-playbook.md` — full architecture and confidence model reference
 - `docs/semantic-search-notes.md` — early search design notes and future concept work
-- `OPERATIONS_LOG.md` — the working history of deployment and repair actions
 
 ---
 
@@ -202,11 +202,10 @@ The backend is now intentionally structured to support both public discovery and
 
 ## Supplemental Current-State Documentation
 
-This repository also contains additional current-state references that explain the live architecture and operational logic:
+This repository also contains additional current-state references that explain the live architecture and product logic:
 
+- `docs/documentation-index.md` — index for the current documentation set
 - `docs/website-architecture-playbook.md` — full architecture and confidence-model guide
 - `docs/semantic-search-notes.md` — earlier search design notes and planned future semantic work
-- `OPERATIONS_LOG.md` — chronological record of the deployed changes, repairs, and data quality fixes
-- `SCOUP_AGENT_HANDOFF.txt` — previous agent handoff notes and early operational guidance
 
 The live backend is no longer limited to the original initial app structure. It now contains a trust-boundary layer for reviewable records and a stricter search relevance model that actively protects the public dataset from noisy or over-broad metadata.
