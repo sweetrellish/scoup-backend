@@ -1819,6 +1819,50 @@ bulk_action` exactly so the frontend can reuse the same pattern):
 - **Status:** Backend deployed to repo and live. Frontend admin page ("Pending Papers", mirroring
   the existing faculty review queue UI) handed to a Claude Code worker, in progress.
 
+### 2026-08-30 08:20 - `linked_faculty` added to the admin paper rows
+
+- **Restore ID:** `NONE` (code-only, no DB write; source snapshot at
+  `~/scoup-backups/admin_paper_views.py.before-linkedfaculty.20260830-*`)
+- **Type:** Backend source
+- **File changed:** `academic/admin_paper_views.py`
+- **Commit:** `e91111d` - pushed to `origin/main`
+- **Deployed:** **No.** `/var/www` untouched by instruction. The review page degrades
+  correctly without it - see "Degradation" below.
+
+Building the frontend review queue surfaced a defect in the row contract added at 08:11.
+`_serialize_admin_paper` returns `faculty_members`, and the intended evidence for the
+queue is "this paper has zero linked SU faculty". Those are not the same field.
+`Paper.faculty_members` is a **denormalised list of author name strings** copied off the
+source record; the real link is the `Paper.authors` M2M. Measured, not assumed:
+
+```
+pending papers with >=1 name in faculty_members : 5982
+pending papers with a row in academic_paper_authors : 0
+```
+
+So a UI reading `faculty_members` would have reported *"1 linked SU faculty: Jill L.
+Caviglia"* on a paper with **no** SU faculty attached at all - the exact opposite of the
+evidence the queue exists to show, on all 5,982 rows.
+
+The row now also carries `linked_faculty: [{id, name, department}]` from the M2M, with
+`prefetch_related("authors")` on the list queryset so 200 rows cost one extra query rather
+than 200. `faculty_members` is unchanged and still returned - the frontend shows it, but
+labelled as what it is ("Author names on the source record - free text from the source
+metadata, none of these matched an SU faculty profile").
+
+- **Degradation.** `linked_faculty` is optional in the frontend type. A backend that
+  predates it (i.e. **live, right now**) simply omits the key, and the page renders the row
+  with "Link status not reported / this backend does not report linked faculty, so no claim
+  is made either way" instead of inventing a link count. The queue is still fully reviewable
+  against live; it just shows one less piece of evidence until this is deployed.
+- **Note.** Another actor committed `cb5a546` (review endpoints narrowed from `IsAdminUser`
+  to a local `IsSuperUser`) into this file while this change was being written. That commit
+  is intact; this change applied on top of it. The frontend was verified against the
+  superuser-only permission, not the older staff-level one.
+- **Verification:** `manage.py check` clean. Full frontend end-to-end run against a throwaway
+  copy of the live DB - see the frontend log entry for 2026-08-30 08:45.
+
+
 ---
 
 ## Known open items
@@ -1836,6 +1880,7 @@ bulk_action` exactly so the frontend can reuse the same pattern):
 | 11 | `/var/www/.../templates` is `drwxr-x--- root root`, unreadable by the service | Low | Open |
 | 12 | Public faculty profile **backend** endpoint built (`/api/faculty/<id>/public/`); frontend page still needed | Medium | **Resolved** 2026-08-29 - `/faculty/<id>` page built and linked from Experts, Networks, Capabilities and Browse; see the frontend log entry for 18:35. In repo, not deployed |
 | 13 | Validation worker built; systemd timer not yet installed on the server | Medium | Partly resolved |
+| 23 | `Paper.faculty_members` (author-name text) reads like an SU link but is not one; any consumer treating it as one is wrong on all 5,982 pending papers | Medium | Partly resolved 2026-08-30 - admin rows now also carry `linked_faculty` from the real M2M (`e91111d`, **not deployed**). Other consumers of `faculty_members` not audited |
 | 14 | 6,062 of 9,237 papers have no linked author (legacy dataset has no institution filter); they cannot surface on a profile and pollute search/category corpus | High | Open |
 | 15 | 3,630 papers have no abstract; sampled OpenAlex re-fetch found 0/170 recoverable (closed-access, not an import bug) | Medium | Open, likely unrecoverable via OpenAlex |
 | 16 | `Paper.faculty_affiliations` is `{}` on all 9,237 papers, so affiliations can only be scraped from abstract text | Medium | Open - limits institution and co-author analysis |
