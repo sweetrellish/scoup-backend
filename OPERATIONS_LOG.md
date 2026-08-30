@@ -1700,6 +1700,33 @@ a first response to a bug that a proper scoring fix solves for free.
   `/api/search/?q=computer+science`.
 - **Status:** Deployed to repo and live; frequency cache rebuilt on both.
 
+### 2026-08-30 08:00 - Search filter tabs (Faculty/Papers/Patents/Projects) fixed; Contact backend migration was never applied
+
+- **Restore ID:** `SRC-20260830-0800`
+
+**Search filter tabs.** The tabs existed in `Home.tsx`/`SearchResults.tsx` code already, but faculty
+results never actually populated the unified search on the live site, because the fix that makes
+that work (`709791e`, "Link home-page faculty search results to their real profiles") was
+committed yesterday evening but the frontend was never rebuilt and redeployed afterward - the live
+bundle was still from 18:31, one commit behind. Built and deployed the full current frontend
+(bubble Expertise Map rebuild + this fix + doc page fix + page pruning, all queued up).
+
+Verified live end to end: searched "nursing", deselected the Papers filter, and a genuine
+**Faculty Member** card (Vinita Agarwal, 86% match) surfaced and correctly linked to
+`/faculty/902`, rendering her real profile.
+
+**Contact backend was 500ing on live.** Unrelated discovery while checking the Docs page: migration
+`0012_contactsettings_contactteammember` had been copied to `/var/www` in an earlier deploy but
+`manage.py migrate` was never actually run there - `no such table: academic_contactsettings`.
+Applied it live.
+
+**Docs page.** Populated `ContactSettings.github_url` / `backend_github_url` with the real repo
+URLs (`sweetrellish/scoup-frontend-2.0`, `sweetrellish/scoup-backend`) via the model directly (both
+repo and live DBs), and reordered the repo cards so the current repos render *after* the existing
+"Academic Metrics (v1)" entry rather than before it, per request.
+
+- **Status:** Backend and frontend both deployed and verified live.
+
 ---
 
 ## Known open items
