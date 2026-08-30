@@ -1775,6 +1775,50 @@ Computer Science - the same faculty member whose metrics were fixed on 2026-08-2
   paper had zero linked SU faculty and either no SU institution tag at all, or one that could not
   be confirmed against the real employee directory.
 
+### 2026-08-30 08:13 - Purged papers restored as an admin review queue, not deleted
+
+- **Restore ID:** `SRC-20260830-0813`
+- **Migration:** `0013_paper_review_note_paper_review_status`
+- **Files added:** `academic/management/commands/restore_purged_papers.py`,
+  `academic/admin_paper_views.py`
+
+Per explicit instruction, the 5,982 papers purged this morning (`INCIDENT-20260830-0803`) are not
+gone - they are restored with a new `Paper.review_status` (`approved` / `pending` / `rejected`,
+mirroring `Faculty.review_status` exactly) set to **pending**, invisible to every public endpoint,
+so an admin works through the ambiguous remainder by hand instead of the purge being silently
+undone or silently final.
+
+**Restore mechanism.** `restore_purged_papers` reads every field directly from a pre-purge backup
+(read-only sqlite3, not a second Django connection) and inserts any paper missing from the current
+DB by DOI - the stable key across databases whose autoincrement PKs differ. It only ever creates
+rows for papers that do not already exist; nothing already kept can be touched or overwritten.
+
+**Public endpoints filtered to `review_status="approved"` only** - `public_search_data`,
+`_lexical_paper_search`, `_category_index` (backs both `/api/categories/` endpoints),
+`network_discovery`. Verified: `/api/public/search-data/` still reports exactly the 3,255
+directory/link-verified papers, not the restored 5,982.
+
+**New admin endpoints** (`admin_paper_views.py`, mirroring `admin_faculty_list/approve/reject/
+bulk_action` exactly so the frontend can reuse the same pattern):
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/admin/papers/?status=pending` | list with title/journal/year/citations/keywords/faculty_members |
+| `POST /api/admin/papers/<id>/approve/` | makes a paper public again |
+| `POST /api/admin/papers/<id>/reject/` | keeps it hidden permanently, with a reason |
+| `POST /api/admin/papers/bulk-action/` | bulk approve/reject |
+
+`admin_stats.content` now reports `papers` (approved-only, matches the public count),
+`papers_pending` (5,982), `papers_rejected`.
+
+- **Verification:** `manage.py check` clean; `APIClient.force_authenticate` (JWT-only auth, session
+  login does not work on these views) confirmed anonymous 401, staff 200, approve/reject/round-trip
+  correctly changed `review_status`; test paper reset to pending afterward so no accidental
+  editorial decision was left in real data. Public dataset confirmed unchanged at 3,255 after
+  restoring 5,982 as pending. Applied and verified identically on live.
+- **Status:** Backend deployed to repo and live. Frontend admin page ("Pending Papers", mirroring
+  the existing faculty review queue UI) handed to a Claude Code worker, in progress.
+
 ---
 
 ## Known open items
