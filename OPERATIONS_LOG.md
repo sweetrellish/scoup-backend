@@ -1478,6 +1478,50 @@ because no faculty photo has ever been uploaded (`photo` is empty on all 182 vis
 Fixing it means adding an nginx `location /media/` alias to `scoupdb/media/` and reloading -
 a root-level server change, so it is recorded as open item #21 rather than done silently.
 
+### 2026-08-30 06:56 - Overnight worker caught a real bug: faculty sync copied fields, not links
+
+- **Restore ID:** `INCIDENT-20260830-0656`
+- **Artifact:** `~/scoup-backups/varwww-db.sqlite3.pre-linksync.*`
+- **File added:** `academic/management/commands/sync_paper_author_links.py`
+
+**Found by checking the scheduled worker's own log, exactly as intended.** The 03:42 nightly run
+of `run_validation` reported 87 faculty records drifting - `article_count` dropping to 0 for
+people who clearly had real papers (Yuqi Peng 10->0, Jeffrey Willey 5->0, etc.). That is
+`recalc_faculty_metrics` doing its job correctly; the real bug was upstream.
+
+**Root cause:** `sync_directory_verified_faculty` (2026-08-29 16:24) copied Faculty *scalar
+fields* from the repo DB into live - including the cached `article_count` - but never touched the
+`academic_paper_authors` M2M table. So the 87 dual-source faculty it created on live looked
+correct on creation (inherited a real `article_count`) but had **zero actual linked papers**,
+identical in shape to the very drift bug this project fixed twice already. The nightly worker's
+metrics recalculation then correctly zeroed the stale cached number to match the (actually empty)
+relation - it exposed the bug rather than causing it.
+
+**Fix:** `sync_paper_author_links` reads the source DB's `academic_paper_authors` join directly
+(read-only sqlite3, not Django ORM against a second connection) and adds the missing links on the
+live DB, matched by `faculty_id` (stable across both databases; PKs are not) and `doi` (also
+stable; Paper PKs differ too). Then `recalc_faculty_metrics --apply` brings the cached counts back
+in sync with the now-correct relation.
+
+| | |
+| --- | --- |
+| faculty matched | 1,719 / 1,719 |
+| links added | 962 |
+| faculty records corrected | 89 |
+
+**One number worth a second look, checked rather than assumed correct:** Stuart E. Hamilton jumped
+5 -> 728 papers. Verified before trusting it - his identity is ORCID-resolved
+(`0000-0001-8114-7247`), and every sampled paper is mangrove/coastal-ecology research, thematically
+consistent throughout. Large international mangrove-monitoring consortium papers run huge
+co-author lists, so this is plausible, not a resolution bug - unlike the Salisbury-institution
+false positives, which resolved on a much weaker signal (a single-year, single-appearance
+institution tag) and were correctly not trusted.
+
+- **Verification:** dry-run showed 0 faculty unmatched and 0 papers not found before applying;
+  metrics recalculated cleanly afterward.
+- **Status:** Applied to live. `sync_paper_author_links` is now the standing fix for this class of
+  gap if it recurs (e.g. if any other faculty get created via a scalar-only sync in the future).
+
 ---
 
 ## Known open items
