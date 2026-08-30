@@ -907,6 +907,27 @@ def _visible_faculty_qs():
     )
 
 
+def _default_prominence(member):
+    """Ranking used when there is no query: surface real, well-described SU faculty.
+
+    Without a seed every overlap score is zero, which previously left the browse view
+    ordered purely by citations and dominated by imported external co-authors.
+
+    Lives here rather than in network_views so `category_detail` and
+    `network_discovery` rank people by the same weights; network_views imports it.
+    """
+    score = 0.0
+    if member.directory_verified:
+        score += 45.0
+    if member.department:
+        score += 10.0
+    if member.title:
+        score += 5.0
+    score += min(member.article_count or 0, 20)
+    score += min((member.total_citations or 0) / 100.0, 20.0)
+    return round(min(score, 100.0), 2)
+
+
 def _category_index():
     """Map category name -> {papers: [Paper], faculty: [Faculty]}."""
     index = {}
@@ -1025,20 +1046,28 @@ def category_detail(request, category):
         target_slug = slugify(target)
         index = _category_index()
 
-        # A slug may address either an exact category or a derived top-level group.
-        member_names = [
+        # A slug may address either an exact category or a derived top-level group,
+        # and usually addresses both at once: "Sociology" exists as a literal keyword
+        # on papers *and* is the group heading for "Sociology, general" and friends.
+        # categories_list counts the whole group, so the detail must resolve the whole
+        # group too - taking only the exact match made the list promise 53 experts
+        # under Sociology and the detail return 0, because faculty carry the long
+        # comma-qualified names and papers carry the short one.
+        exact_names = [
             name
             for name in index
             if name.lower() == target.lower() or slugify(name) == target_slug
         ]
-        display_name = member_names[0] if member_names else None
+        group_names = [
+            name for name in index if slugify(_split_top_level(name)) == target_slug
+        ]
 
-        if not member_names:
-            member_names = [
-                name for name in index if slugify(_split_top_level(name)) == target_slug
-            ]
-            if member_names:
-                display_name = _split_top_level(member_names[0])
+        member_names = list(dict.fromkeys(exact_names + group_names))
+        display_name = None
+        if exact_names:
+            display_name = exact_names[0]
+        elif group_names:
+            display_name = _split_top_level(group_names[0])
 
         if not member_names:
             return Response(
@@ -1091,6 +1120,7 @@ def category_detail(request, category):
 
         faculty_payload = []
         departments = set()
+        member_name_lookup = {name.lower(): name for name in member_names}
         for member in faculty.values():
             if member.department:
                 departments.add(member.department)
@@ -1113,12 +1143,30 @@ def category_detail(request, category):
                     "total_citations": member.total_citations or 0,
                     "article_count": member.article_count or 0,
                     "photo": photo_url or None,
-                    "themes": _normalize_keyword_list(member.themes),
+                    # Some records store the literal string "[]" in themes; it is not a
+                    # theme and must not render as a tag.
+                    "themes": [
+                        theme
+                        for theme in _normalize_keyword_list(member.themes)
+                        if theme not in {"[]", "[", "]"}
+                    ],
                     "paper_ids": [
                         p.pk for p in papers.values() if member.pk in {a.pk for a in p.authors.all()}
                     ],
                     "is_approved": bool(member.is_approved),
                     "profile_visibility": bool(member.profile_visibility),
+                    "directory_verified": bool(member.directory_verified),
+                    # The exact taxonomy strings on this person that put them in this
+                    # category - real evidence of why they are listed here, as opposed
+                    # to generated justification text.
+                    "matched_categories": [
+                        member_name_lookup[item.lower()]
+                        for item in dict.fromkeys(_normalize_keyword_list(member.categories))
+                        if item.lower() in member_name_lookup
+                    ],
+                    # Same weights as network_discovery's no-query ranking, so the two
+                    # surfaces order people identically.
+                    "prominence": _default_prominence(member),
                     "email": member.email or "",
                 }
             )

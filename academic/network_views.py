@@ -17,6 +17,7 @@ from rest_framework.response import Response
 
 from .models import Faculty, NetworkInquiry, Paper, Patent, Project
 from .views import (
+    _default_prominence,
     _full_name,
     _normalize_keyword_list,
     _visible_faculty_qs,
@@ -62,24 +63,6 @@ def _match_score(seed, candidate_terms):
         return 0.0, []
     score = 100.0 * len(shared) / len(seed)
     return round(min(score, 100.0), 2), sorted(set(shared))[:12]
-
-
-def _default_prominence(member):
-    """Ranking used when there is no query: surface real, well-described SU faculty.
-
-    Without a seed every overlap score is zero, which previously left the browse view
-    ordered purely by citations and dominated by imported external co-authors.
-    """
-    score = 0.0
-    if member.directory_verified:
-        score += 45.0
-    if member.department:
-        score += 10.0
-    if member.title:
-        score += 5.0
-    score += min(member.article_count or 0, 20)
-    score += min((member.total_citations or 0) / 100.0, 20.0)
-    return round(min(score, 100.0), 2)
 
 
 def _client_ip(request):
