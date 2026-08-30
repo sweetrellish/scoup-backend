@@ -108,6 +108,17 @@ class Paper(models.Model):
     paper_embedding = models.JSONField(default=list, blank=True)
     embedding_model = models.CharField(max_length=64, default="", blank=True)
     embedding_updated_at = models.DateTimeField(null=True, blank=True)
+    # Papers restored from the 2026-08-30 unverifiable-authorship purge sit here as
+    # 'pending' rather than being silently public again - an admin decides case by
+    # case, the same review pattern already used for Faculty.
+    REVIEW_STATUS_CHOICES = [
+        ("approved", "Approved"),
+        ("pending", "Pending"),
+        ("rejected", "Rejected"),
+    ]
+    review_status = models.CharField(max_length=16, choices=REVIEW_STATUS_CHOICES, default="approved")
+    review_note = models.TextField(blank=True, default="")
+
     def __str__(self):
         return self.title
 
