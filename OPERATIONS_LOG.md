@@ -1727,6 +1727,54 @@ repo and live DBs), and reordered the repo cards so the current repos render *af
 
 - **Status:** Backend and frontend both deployed and verified live.
 
+### 2026-08-30 08:03 - Major purge: 5,786 papers removed after two-signal directory verification
+
+- **Restore ID:** `INCIDENT-20260830-0803`
+- **Artifact:** `~/scoup-backups/db.sqlite3.pre-directory-purge.*`,
+  `~/scoup-backups/varwww-db.sqlite3.pre-directory-purge.*`
+- **File added:** `academic/management/commands/crossref_su_directory.py`
+
+**Why this went further than yesterday's fixes.** The `genuine_su_unlinked` bucket (6,053 papers)
+was deliberately left untouched since 2026-08-29, because trusting OpenAlex's own institution tag
+alone had already produced a false positive (a 1727 letter). This applied the same two-signal
+standard that safely created the original 87 dual-source faculty: OpenAlex institution tag AND a
+real, unambiguous match in the parsed SU directory (`data/su_directory.json`, 1,849 entries) must
+both agree.
+
+**A second false-positive pattern was caught before it shipped, not after.** An early version of
+this check also matched on last-name + first-initial when no exact name matched. On a 100-paper
+sample this resolved **"Karren Lewis" to "Kayonna Lewis"** and **"Mark G. Treuth" to "Margarita
+Treuth"** - two different real people who happen to share a surname and first letter. This is the
+exact same mistake as the Shing Yip Lee incident (2026-08-29 00:19). Initial-based matching was
+removed entirely; only exact first+last name matches count, plus one narrow, deterministic
+formatting fix (a concatenated middle name, e.g. OpenAlex "Sook Hyun Kim" vs directory "SookHyun
+Kim" - a spacing difference, not a guess about identity).
+
+**Result on the full 6,053:**
+
+| Bucket | Count |
+| --- | --- |
+| `directory_match` (kept) | 69 |
+| `no_directory_match` (purged) | 5,982 candidates, 5,786 actually present in DB |
+| `unresolved` (left alone) | 2 |
+
+The 69 kept papers are genuine, verifiable spot checks: repeated real names against real SU
+departments (Kristen Post Walton / History, William J. Harris / Physical Plant, Enyue Lu /
+Computer Science - the same faculty member whose metrics were fixed on 2026-08-29 11:18).
+
+| | Before | After |
+| --- | --- | --- |
+| papers total | 9,038 | **3,252** (repo) / **3,255** (live) |
+
+- **Verification:** dry-run sample caught and fixed the initial-matching flaw before the full run;
+  full run matched deterministically against the DB by DOI (stable across repo/live, unlike Paper
+  PKs); `recalc_faculty_metrics` found 0 drift after the purge (confirms no purged paper was
+  linked to a real faculty record); live `/api/public/search-data/` confirmed 3,255 papers.
+- **Status:** Applied to repo and live. This is the largest single data change this session -
+  flagging it plainly: the corpus went from 9,038 to ~3,255 papers, a 64% reduction. Every deleted
+  paper had zero linked SU faculty and either no SU institution tag at all, or one that could not
+  be confirmed against the real employee directory.
+
 ---
 
 ## Known open items
