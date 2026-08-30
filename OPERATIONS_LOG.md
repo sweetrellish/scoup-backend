@@ -1638,6 +1638,68 @@ collaboration or network field at all. Scaling those into bars would have been f
   bars simply absent) - but the Expertise Map only shows the correct expert lists once *this*
   backend change is live.
 
+### 2026-08-30 07:36 - Search relevance: discount broad umbrella keyword tags (TF-IDF style)
+
+- **Restore ID:** `SRC-20260830-0736`
+- **Files changed:** `academic/views.py`
+- **File added:** `academic/management/commands/build_keyword_frequency.py`
+
+**Reported symptom:** searching "computer science" returned a 99% "High Match" for a 2010 paper
+entirely about reading-comprehension pedagogy in science classrooms - nothing to do with
+computing.
+
+**Root cause, found by inspecting the actual paper.** Its keyword list (16 tags, algorithmically
+assigned by OpenAlex) included "Computer science" and "Artificial intelligence" alongside
+Archaeology, History, Philosophy and others with zero topical connection to each other. The scorer
+treated an exact match against "Computer science" as strong, bonus-worthy evidence. Checked
+whether this was a one-off: it was not - "Computer science" alone sits on **2,689 of 9,038 papers
+(30%)**, alongside similarly broad umbrella tags Biology (37%), Medicine (30%), Psychology (18%),
+Political science (14%). These are OpenAlex's coarse top-level field classifications, not specific
+topic signals, and a short keyword list doesn't protect against carrying one.
+
+**Fix - the standard information-retrieval answer to over-trusting common terms (TF-IDF), applied
+per keyword rather than guessed at with a hardcoded list:**
+
+1. `build_keyword_frequency` computes real document frequency for every keyword across the
+   corpus once, caches it to `data/keyword_document_frequency.json` (gitignored, regenerate after
+   any import - not committed, same treatment as `validation_state.json`).
+2. `_score_paper` now scores each token against *individual* keywords (not the joined blob), and
+   discounts a keyword's contribution by how common it is corpus-wide (`min(1, 150/document_freq)`)
+   - a keyword on 2,689 papers contributes ~6% of its normal weight; a keyword on 10 papers
+   contributes full weight.
+3. A token whose only real-weight evidence is a heavily-discounted keyword no longer counts as
+   "matched" at all for the existing "every query term must appear somewhere" gate (previously any
+   nonzero weight passed, which is what let "computer" alone via the noisy tag satisfy that rule).
+4. The exact-keyword-phrase bonus is discounted the same way, so an exact match against a common
+   umbrella term earns almost none of the +12 bonus it used to.
+
+| Query | Before | After |
+| --- | --- | --- |
+| "computer science" top result | 99% (unrelated pedagogy paper) | 0% (excluded); top result now genuinely about human-computer interaction |
+| "machine learning" | unaffected | still 100/100/100 on genuinely ML papers |
+| "nursing education", "climate change", "social work" | unaffected | spot-checked clean, no regression |
+
+**Known remaining limitation, not fixed here.** A handful of borderline results still surface via
+rare *compound* keywords ("Computer security", "Semantics (computer science)") that are genuinely
+uncommon (so not discounted) but only loosely related to what a searcher means by "computer
+science" - e.g. a paper on research-fraud detection tagged "Computer security" scored 75%. This is
+a smaller, subtler problem than the one fixed (the confidence ceiling for these dropped from ~86
+to the low 70s, well below genuinely on-topic results), and a full fix would need semantic
+embeddings rather than more keyword heuristics - already logged as a known limitation on
+2026-08-28.
+
+**On using an LLM (Claude) to re-verify search relevance, which the user proposed:** deliberately
+not built. This bug had a concrete, explainable, deterministic root cause and a standard IR fix
+with no added latency or per-query cost - an LLM reranking pass would be the right tool for the
+*remaining* subtler compound-keyword problem above, if it turns out to matter in practice, not as
+a first response to a bug that a proper scoring fix solves for free.
+
+- **Verification:** `manage.py check` clean; unit-level rescoring test confirmed 99->0 on the
+  reported paper with no drop on a real focused-keyword CS paper (86.46, unchanged); spot-checked
+  three unrelated queries live for regressions - none found. Deployed and confirmed live via
+  `/api/search/?q=computer+science`.
+- **Status:** Deployed to repo and live; frequency cache rebuilt on both.
+
 ---
 
 ## Known open items
