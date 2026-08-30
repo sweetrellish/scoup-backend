@@ -125,7 +125,9 @@ def admin_stats(request):
                 "external_coauthors": faculty_qs.count() - su_qs.count(),
             },
             "content": {
-                "papers": Paper.objects.count(),
+                "papers": Paper.objects.filter(review_status="approved").count(),
+                "papers_pending": Paper.objects.filter(review_status="pending").count(),
+                "papers_rejected": Paper.objects.filter(review_status="rejected").count(),
                 "patents": Patent.objects.count(),
                 "projects": Project.objects.count(),
             },

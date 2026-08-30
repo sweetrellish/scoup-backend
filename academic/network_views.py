@@ -149,7 +149,7 @@ def network_discovery(request):
         colleagues = colleagues[:limit]
 
         papers = []
-        paper_qs = Paper.objects.prefetch_related("authors")
+        paper_qs = Paper.objects.filter(review_status="approved").prefetch_related("authors")
         if query:
             paper_qs = paper_qs.filter(
                 Q(title__icontains=query)

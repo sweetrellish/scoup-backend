@@ -318,7 +318,8 @@ def public_search_data(request):
             .order_by("last_name", "first_name")
         )
         papers_qs = (
-            Paper.objects.defer("paper_embedding", "embedding_model", "embedding_updated_at")
+            Paper.objects.filter(review_status="approved")
+            .defer("paper_embedding", "embedding_model", "embedding_updated_at")
             .prefetch_related("authors")
             .order_by("-id")
         )
@@ -770,7 +771,7 @@ def _lexical_paper_search(query, limit, filters=None):
             | Q(themes__icontains=token)
         )
 
-    candidates = Paper.objects.filter(candidate_filter).prefetch_related("authors")
+    candidates = Paper.objects.filter(candidate_filter, review_status="approved").prefetch_related("authors")
 
     scored = []
     for paper in candidates:
@@ -1002,7 +1003,7 @@ def _category_index():
     """Map category name -> {papers: [Paper], faculty: [Faculty]}."""
     index = {}
 
-    for paper in Paper.objects.prefetch_related("authors"):
+    for paper in Paper.objects.filter(review_status="approved").prefetch_related("authors"):
         for name in _normalize_keyword_list(paper.keywords):
             index.setdefault(name, {"papers": [], "faculty": []})["papers"].append(paper)
 
@@ -1096,7 +1097,7 @@ def categories_list(request):
                 }
             )
 
-        fallback_min = _default_category_min(Paper.objects.count())
+        fallback_min = _default_category_min(Paper.objects.filter(review_status="approved").count())
         try:
             min_articles = max(0, int(request.query_params.get("min_count", fallback_min)))
         except (TypeError, ValueError):
