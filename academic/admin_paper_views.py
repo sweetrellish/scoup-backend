@@ -22,6 +22,12 @@ class IsSuperUser(BasePermission):
         return bool(request.user and request.user.is_authenticated and request.user.is_superuser)
 
 
+def _faculty_display_name(f):
+    """Faculty.name is optional; fall back the same way admin_views does."""
+    joined = f"{(f.first_name or '').strip()} {(f.last_name or '').strip()}".strip()
+    return joined or (f.name or "").strip() or f.faculty_id
+
+
 def _serialize_admin_paper(paper):
     # `faculty_members` is a denormalised list of *author name strings* copied
     # from the source record. It is NOT evidence of an SU affiliation - every one
@@ -39,7 +45,7 @@ def _serialize_admin_paper(paper):
         "keywords": (paper.keywords or [])[:15],
         "faculty_members": paper.faculty_members or [],
         "linked_faculty": [
-            {"id": f.pk, "name": f.name, "department": f.department or ""}
+            {"id": f.pk, "name": _faculty_display_name(f), "department": f.department or ""}
             for f in paper.authors.all()
         ],
         "review_status": paper.review_status,
