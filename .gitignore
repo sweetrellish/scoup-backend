@@ -106,3 +106,4 @@ refs/
 
 # Worker run state (machine-local)
 data/validation_state.json
+copilot-session*.md
