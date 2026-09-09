@@ -1466,7 +1466,7 @@ breaks the page later.
 location** (`/etc/nginx/sites-enabled/scoup2025-dist.conf`), so `/media/...` falls through to
 the SPA route and returns `index.html` with HTTP 200:
 
-```
+```bash
 $ curl -o /dev/null -w "%{http_code} %{content_type}" https://scoup-salisbury.net/media/faculty_photos/anything.png
 200 text/html
 ```
@@ -1835,7 +1835,7 @@ queue is "this paper has zero linked SU faculty". Those are not the same field.
 `Paper.faculty_members` is a **denormalised list of author name strings** copied off the
 source record; the real link is the `Paper.authors` M2M. Measured, not assumed:
 
-```
+```bash
 pending papers with >=1 name in faculty_members : 5982
 pending papers with a row in academic_paper_authors : 0
 ```
@@ -1862,6 +1862,83 @@ metadata, none of these matched an SU faculty profile").
 - **Verification:** `manage.py check` clean. Full frontend end-to-end run against a throwaway
   copy of the live DB - see the frontend log entry for 2026-08-30 08:45.
 
+### 2026-09-09 18:46 - Final validation pass: 40 more approved papers quarantined, common-name collisions in `directory_match`
+
+- **Restore ID:** `SRC-20260909-1846`
+- **Artifact:** `~/scoup-backups/db.sqlite3.pre-final-validation.20260909-184617`
+- **Type:** Data quarantine only (no schema, code, or deploy change)
+
+Ran `manage.py run_validation --audit-only` plus a manual review of every currently-**approved**
+(public) paper with zero linked SU faculty (100 papers) against `data/su_directory.json`,
+`data/directory_crossref_report.json`, and `data/paper_verification_report.json`, per request to
+do a final DB validation referencing the SU directory and the existing history logs before
+declaring this pass done.
+
+**Finding 1 - exact-name directory matching still produces false positives on common names.**
+The 2026-08-30 08:03 two-signal purge (`INCIDENT-20260830-0803`) already removed initial-based
+false matches (Shing Yip Lee; Karren Lewis -> Kayonna Lewis; Mark G. Treuth -> Margarita Treuth).
+This pass found the same failure mode surviving **exact** first+last name matching, when the name
+itself is common enough that two different real people share it:
+
+| Directory match (kept, approved) | Department | Actual paper subject | Verdict |
+| --- | --- | --- | --- |
+| William Harris | Physical Plant | 1960s-70s electron microscopy / vaccinia virus / viral haemorrhagic fever (8 papers) | False positive - UK Porton Down-era virology, not SU |
+| Julie Golightly | Physical Plant | Populus (poplar) hybrid climate-response genetics (3 papers) | False positive |
+| Amy Jones | Modern Languages | JAK2-V617F leukemia/hematology genetics with UK hospital co-authors (3 papers) | False positive |
+| David Johnson | English | Plastic surgery review; sports-science creatine study (2 papers, two different real "David Johnson"s) | False positive |
+| Alison Smith | Leadership & Literacy Studies | Tree leaf phenology field methods | False positive |
+
+All 17 papers above were part of the `directory_match` bucket (69 total) from the 2026-08-30
+crossref run and had been approved on that basis. The remaining ~52 of the 69 were re-checked for
+department/subject plausibility and left approved (e.g. Kristen Post Walton/History on Mary Queen
+of Scots, Jamie Emerson/Perdue School of Business on econometrics, Sook Hyun Kim/Social Work on
+welfare and human-rights topics - subject matter matches the appointment).
+
+**Finding 2 - a second, previously unflagged cluster of ~23 approved papers never went through
+institution verification at all** (absent from both `paper_verification_report.json` and
+`directory_crossref_report.json`), had zero linked SU faculty, and are UK/foreign-institution
+content by internal evidence alone: a pre-1985 Porton Down arbovirus/biodefense-research cluster
+(20 papers - "Microbiological Research at Porton", "Arbovirus infections in Sarawak", Langat virus,
+ammonite paleontology, a Turner's-syndrome case report on an African patient), two sulphur-mustard/
+melanoma cytotoxicity toxicology papers (chemical-agent research), and one Dutch-language Belgian
+veterinary journal article (`Discospondylitis bij de hond`, Ghent University authors) with no
+plausible SU connection. These likely predate the two-signal verification pipeline, or were
+delinked from a Faculty record by a later cleanup pass without the approval being revisited.
+
+**Action taken - quarantine, not deletion**, consistent with the `SRC-20260830-0813` policy of
+holding ambiguous records for human review rather than purging or silently keeping them public:
+
+| Batch | Papers | Basis |
+| --- | --- | --- |
+| A - William Harris / Julie Golightly | 11 | Directory match, department/subject mismatch |
+| B - Amy Jones / David Johnson / Alison Smith | 6 | Directory match, department/subject mismatch |
+| C - pre-2000 Porton Down / UK biomedical cluster | 20 | Never verified; content evidence only |
+| D - sulphur mustard / melanoma toxicology | 2 | Never verified; content evidence only |
+| E - Dutch veterinary journal | 1 | Never verified; content evidence only |
+| **Total quarantined** | **40** | `review_status` set `approved` -> `pending`, each with a `review_note` explaining the specific evidence |
+
+Each affected `Paper.review_note` records the exact reasoning so an admin reviewing the queue does
+not have to re-derive it. Nothing was deleted; every quarantined row is fully restorable via the
+existing `/api/admin/papers/<id>/approve/` endpoint if a reviewer disagrees.
+
+**Remaining lower-confidence items left approved, flagged here for awareness rather than acted on**
+(single-signal, ambiguous, or plausible enough not to warrant a unilateral change): Stephen Johnson
+(Dining Services) matched to a field-hockey fitness study; Michael Smith (University Bookstore)
+matched to an academic-literacy paper; Karen Olmstead (Academic Affairs) matched to a plant-
+restoration ecology paper; a Sloan Digital Sky Survey consortium paper (id 851) with an empty
+author-name field and no linked faculty; a 2023 UK NHS diabetes-clinic conference abstract (id
+8170) with no linked faculty. None were touched - each has at least one plausible (if weak)
+connection, and this project's standard is not to guess.
+
+- **Verification:** DB backed up to `~/scoup-backups/db.sqlite3.pre-final-validation.20260909-184617`
+  before any write. `manage.py check` clean before and after. `run_validation --audit-only` run
+  before and after: `metric_drift` unchanged at 10 (expected - all quarantined papers had zero
+  linked authors, so no Faculty metric depends on them). Counts reconciled exactly:
+  approved 3,252 -> 3,212, pending 5,982 -> 6,022 (Δ40 both directions). Public dataset size drops
+  from 3,252 to 3,212 once redeployed.
+- **Status:** Applied to the repo database only; **not yet deployed to live**. The 40 quarantined
+  papers remain visible on the live public site until this DB state (or an equivalent live-side
+  quarantine pass against the live DB) is deployed. Added to Known open items below.
 
 ---
 
@@ -1890,6 +1967,7 @@ metadata, none of these matched an SU faculty profile").
 | 22 | `/api/categories/` takes ~3.2 s: `_category_index()` walks every paper and faculty record on each request, with no caching | Low | Open - acceptable today, will not scale with the corpus |
 | 21 | Nginx has no `location /media/`, so uploaded photos return `index.html` (200 text/html) instead of the file. Affects contact team photos **and** faculty photos | Medium | Open - needs a root nginx change + reload |
 | 18 | The repo virtualenv `/home/rellis/scoup-backend/.venv` was missing, so `scoup-backend-staging.service` could not start | Medium | Resolved 2026-08-29 - rebuilt from requirements.txt |
+| 24 | 40 papers quarantined 2026-09-09 (common-name directory-match collisions + never-verified Porton Down/UK cluster) - repo DB only | Medium | Open - needs the same quarantine applied live, or a live redeploy of this DB state, and an admin to work the new pending rows |
 
 **Resolved:** full OpenAlex backfill, category granularity, DEBUG exposure, categories stub, search relevance, repo/deploy divergence,
 DB-overwriting deploy, `/var/www` git remote, broken `backupAll.sh` refs, deploy outage.
