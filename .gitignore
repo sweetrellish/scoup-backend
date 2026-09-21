@@ -68,16 +68,20 @@ database-structrue.pdf
 *.swp
 *.swo
 
-# Local scripts and data
+# Local scripts and generated data
 scripts/
 data/
-docs/
-*.sh
+/create_backup.sh
+/topBackup.sh
+**/backupAll.sh
 
 # Misc
 staticfiles/
-*.txt
 core/
+/SCOUP_AGENT_HANDOFF.txt
+/serializers.txt
+/urls.txt
+/views.txt
 
 # ── Local data, exports and artifacts (never publish) ────────────────
 db.sqlite3
@@ -93,6 +97,7 @@ verified_faculty.json
 # Logs and captured sessions
 *.log
 500-error-session.log
+OPERATIONS_LOG.md
 
 # Collected static and local screenshots/refs
 staticfiles/
@@ -107,3 +112,7 @@ refs/
 # Worker run state (machine-local)
 data/validation_state.json
 copilot-session*.md
+
+# Personal agent customizations must stay outside the public repository
+/code-commenter.md
+/.github/agents/
